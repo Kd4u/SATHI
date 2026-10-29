@@ -65,7 +65,20 @@ Please do not upload real timetables with names or contact details, account expo
 
 ## Screenshots
 
-The current icon is included above. A curated screenshot gallery is planned; we are deliberately avoiding console/account screenshots and misleading mockups. See [the screenshot checklist](docs/SCREENSHOTS.md) if you would like to contribute images.
+Actual app captures supplied by the maintainer. The iPhone captures show an earlier installed layout; the latest source may differ.
+
+<p align="center"><img src="docs/assets/screenshots/ipad-today.png" width="800" alt="SATHI on iPad in dark mode, with a sidebar and Today overview"></p>
+
+<table>
+  <tr>
+    <td><img src="docs/assets/screenshots/iphone-calendar.png" width="240" alt="iPhone calendar with class and event markers"></td>
+    <td><img src="docs/assets/screenshots/iphone-semester.png" width="240" alt="iPhone semester setup with first- and second-year choices"></td>
+    <td><img src="docs/assets/screenshots/iphone-appearance.png" width="240" alt="Appearance and notification settings on iPhone"></td>
+  </tr>
+  <tr><td align="center">Calendar</td><td align="center">Semester setup</td><td align="center">Appearance & reminders</td></tr>
+</table>
+
+[View the full Mac, iPad and iPhone gallery](docs/GALLERY.md). Android screenshots are welcome once verified on a real build. See [the screenshot checklist](docs/SCREENSHOTS.md) for future contributions.
 
 ## License
 
