@@ -4,7 +4,7 @@
 
 <h1 align="center">SATHI</h1>
 <p align="center"><a href="https://github.com/Kd4u/SATHI/actions/workflows/ci.yml"><img src="https://github.com/Kd4u/SATHI/actions/workflows/ci.yml/badge.svg" alt="Source checks"></a></p>
-<p align="center">Your timetable, attendance and notes. One academic companion across your devices.</p>
+<p align="center">Built for IIM Bodh Gaya students. Your timetable, attendance and notes across devices.</p>
 <p align="center">
   <a href="LICENSE">MIT licensed</a> ·
   <a href="CONTRIBUTING.md">Contributions welcome</a> ·
@@ -12,9 +12,17 @@
   <a href="docs/ROADMAP.md">Roadmap</a>
 </p>
 
-SATHI is a native academic planner for iPhone, iPad, Mac and Android. Import an Excel timetable, choose your section or subjects, record attendance, and keep your schedule and typed notes available across devices through your personal Google account.
+SATHI is a native academic planner built specifically for students of the **Indian Institute of Management Bodh Gaya (IIM Bodh Gaya)**, available on iPhone, iPad, Mac and Android. Import an Excel timetable, choose your section or subjects, record attendance, and keep your schedule and typed notes available across devices through your personal Google account.
 
 **This is an early community MVP.** The Apple app and Android port have different levels of feature coverage. Real Android Google sign-in and two-device cloud sync still need end-to-end verification; passing local compatibility tests is not proof of that integration. Please use a test account and keep a backup when trying new builds.
+
+## Made for IIM Bodh Gaya
+
+![IIM Bodh Gaya campus, photographed from the academic-block courtyard](docs/assets/iim-bodh-gaya-campus.png)
+
+SATHI is designed around IIM Bodh Gaya's Excel timetable workflow, semester structure, first-year sections and second-year elective choices. It brings those schedules together with personal attendance records, campus events and subject notes.
+
+This is an independent student project, not an official IIM Bodh Gaya application or an institute-endorsed attendance system. Contributors from the IIM Bodh Gaya community and beyond are welcome; adapting it to another institution may require changes to the importer and attendance rules.
 
 ## What you can do
 
