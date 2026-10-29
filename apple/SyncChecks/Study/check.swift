@@ -1,0 +1,66 @@
+import Foundation
+
+@main struct StudyChecks {
+    static func main() throws {
+        assert(TimetableSection.label(in: "Section A") == "A")
+        assert(TimetableSection.label(in: "MBA Core - Sec. D") == "D")
+        assert(TimetableSection.label(in: "B") == "B")
+        assert(TimetableSection.label(in: "MBA") == "")
+        var untouched = StudyWorkspace()
+        assert(!untouched.shouldPublish(hasTimetable: false))
+        assert(untouched.shouldPublish(hasTimetable: true))
+        untouched.preferences.didCustomizeAppearance = true
+        assert(untouched.shouldPublish(hasTimetable: false))
+        let legacyPreferences = StudyPreferences()
+        var legacyJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyPreferences)) as! [String: Any]
+        legacyJSON.removeValue(forKey: "appearanceMode"); legacyJSON.removeValue(forKey: "glassStyle")
+        let legacyRestored = try JSONDecoder().decode(StudyPreferences.self, from: JSONSerialization.data(withJSONObject: legacyJSON))
+        assert(legacyRestored.appearanceMode == nil && legacyRestored.glassStyle == nil)
+        let preferences = StudyPreferences()
+        let first = ClassWindow.make(id: "0", subject: "Operations", date: "2026-10-27", time: "09.00 – 10.30")!
+        let at845 = first.start.addingTimeInterval(-15 * 60)
+        assert(first.fingerprintMinutesLeft(at: at845, preferences: preferences) == 14)
+        assert(ClassWindow.make(id: "x", subject: "", date: "2026-10-27", time: "09:00 AM - 10:30 AM") == ClassWindow(id: "x", subject: "", start: first.start, end: first.end))
+        assert(ClassWindow.make(id: "x", subject: "", date: "2026-10-27", time: "25:00-26:00") == nil)
+        assert(ClassWindow.make(id: "x", subject: "", date: "2026-10-27", time: "10:00-09:00") == nil)
+        let windows = (0..<6).map { i in ClassWindow(id: String(i), subject: "Course", start: first.start.addingTimeInterval(Double(i * 7200)), end: first.end.addingTimeInterval(Double(i * 7200))) }
+        let ended = first.end.addingTimeInterval(1)
+        var proof = ClassProof(attended: true, fingerprint: true, signedSheet: false)
+        assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: ended) == Set(["1", "2", "3"]))
+        assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: first.start.addingTimeInterval(2400)).isEmpty)
+        proof.signedSheet = nil
+        assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: ended).isEmpty)
+        proof.fingerprint = false; proof.signedSheet = false
+        assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: ended).isEmpty)
+        assert(AttendanceRules.status(proof: proof, recorded: nil, penalized: false, classEnded: true) == "Missed")
+        proof.fingerprint = true; proof.signedSheet = true
+        assert(AttendanceRules.status(proof: proof, recorded: nil, penalized: false, classEnded: true) == "Attended")
+        proof.officialDuty = true; proof.signedSheet = false
+        assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: ended).isEmpty)
+        assert(AttendanceRules.status(proof: proof, recorded: nil, penalized: true, classEnded: true) == "OD")
+        let pending = ClassProof(attended: true)
+        assert(AttendanceRules.status(proof: pending, recorded: nil, penalized: false, classEnded: true) == nil)
+        let raw = TimetableSession(id: "stable-id", date: "2026-10-27", day: "Tuesday", time: "09:00 – 10:30", subject: "Operations", section: "A", teacher: "Faculty", source: "Sheet1")
+        let moved = ScheduleOverride(id: raw.id, date: "2026-10-28", start: "11:00", end: "12:30", title: raw.subject)
+        let extra = ScheduleOverride(id: "guest", date: "2026-10-29", start: "11:00", end: "12:30", title: "Guest lecture", added: true, semesterID: "other-semester")
+        let adjusted = ScheduleEdits.apply([raw], overrides: [raw.id: moved, extra.id: extra], semesterID: "this-semester")
+        assert(adjusted.count == 1 && adjusted[0].id == raw.id && adjusted[0].date == "2026-10-28")
+        var scopedMove = moved; scopedMove.semesterID = "old-semester"
+        assert(ScheduleEdits.apply([raw], overrides: [raw.id: scopedMove], semesterID: "new-semester")[0].date == raw.date)
+        let note = NotebookPage(text: "Lecture notes · हिंदी", drawing: Data([0, 1, 2, 255]), drawingPreview: Data([3, 4]))
+        let restored = try JSONDecoder().decode(NotebookPage.self, from: JSONEncoder().encode(note))
+        assert(restored == note)
+        let report = TimetableReport(workbook: "Semester 1.xlsx", sessions: [raw], subjects: [], events: [], warnings: [])
+        let event = SATHICustomEvent(date: "2026-10-27", start: "17:00", end: "18:00", title: "Study group", type: "Study", subject: "Operations", notes: "Bring notes")
+        let archive = ArchivedSemester(report: report, number: 1, selectedKeys: ["Operations|A"], attendance: [raw.id: "OD"], proofRecords: [raw.id: proof], overrides: [raw.id: scopedMove], semesterID: "old-semester", section: "A", customEvents: [event], minimumAttendance: 80)
+        let restoredArchive = try JSONDecoder().decode(ArchivedSemester.self, from: JSONEncoder().encode(archive))
+        assert(restoredArchive.customEvents?.first?.id == event.id && restoredArchive.customEvents?.first?.notes == "Bring notes")
+        assert(restoredArchive.attendance[raw.id] == "OD" && restoredArchive.proofRecords[raw.id]?.officialDuty == true && restoredArchive.section == "A")
+        let large = (0..<5000).map { index in ClassWindow(id: "large-\(index)", subject: "Course", start: first.start.addingTimeInterval(Double(index * 7200)), end: first.end.addingTimeInterval(Double(index * 7200))) }
+        let began = Date()
+        let effective = AttendanceRules.effective(windows: large, proofs: [large[0].id: ClassProof(attended: true, fingerprint: true, signedSheet: false)], recorded: [:], now: ended)
+        assert(effective[large[1].id] == "Missed" && effective[large[4].id] == nil)
+        print("5,000-class attendance calculation: \(Date().timeIntervalSince(began)) seconds")
+        print("Study rules passed: 14-minute target, dot/AM time formats, invalid times, pending proofs, OD, exactly three penalties, no early penalty, stable reschedule IDs, semester scoping, note bytes and semester history round trips.")
+    }
+}

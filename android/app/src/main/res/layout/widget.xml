@@ -1,0 +1,4 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="18dp" android:background="@drawable/widget_background">
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SATHI · Your schedule" android:textColor="#8AC6FF" android:textSize="16sp" android:textStyle="bold"/>
+    <TextView android:id="@+id/widget_text" android:layout_width="match_parent" android:layout_height="match_parent" android:text="Open SATHI and sync your timetable" android:textColor="#F3F6FA" android:textSize="14sp" android:paddingTop="10dp" android:maxLines="15"/>
+</LinearLayout>

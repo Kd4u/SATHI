@@ -1,0 +1,35 @@
+# Architecture
+
+SATHI has two native clients and one compatible Firebase data contract. SwiftUI code is in `apple/`; Java Android Views code is in `android/`. There is no shared UI runtime and no client-side admin credential.
+
+## Local-first flow
+
+Clients scope saved files to the authenticated Firebase UID rather than sharing a global cache between accounts. Local writes use atomic replacement. A cached timetable is shown immediately; network requests and workbook parsing should not block drawing, typing or initial presentation.
+
+Explicit Sync exchanges changes. Roughly hourly background opportunities are also scheduled, subject to platform scheduling and battery limits. No real-time Firestore listener is used for the main timetable. An account with no local timetable can fetch cloud data during first sign-in.
+
+## Timetable snapshot
+
+`users/{uid}/sathi/snapshot` has `schema: 1`, a Firestore bytes `payload` and an `updatedAt` server timestamp. The payload is a JSON object containing `records`, a map of keys to **base64-encoded JSON bytes**, matching Swift Codable `Data`.
+
+Keys include `timetable`, `selection`, `attendance:{id}`, `event:{uuid}`, `study:preferences`, `study:semesters`, `study:proof:{id}` and `study:override:{id}`. Preserve unknown keys byte-for-byte. Session IDs derived from worksheet/cell/index allow attendance to refer to the same imported class on both platforms. Swift dates use seconds from 2001-01-01 unless the model specifies a date string.
+
+Sync uses a three-way comparison between a saved baseline, the local snapshot and the remote snapshot, inside a Firestore transaction. Independent edits merge; divergent changes to the same key produce a conflict. Android also merges edits made while the request was running into the local result, so a network response cannot discard fresh local typing/changes.
+
+The shared snapshot stays below the Firestore document-size limit; clients reject oversized payloads before committing. Do not store drawing blobs inside this single document.
+
+## Notes, archives and journal
+
+Private study assets live below `users/{uid}/studyAssets/{id}`. A head contains metadata, a revision and a chunk count; content is stored in versioned chunk documents. A new head is published transactionally after content upload. Revision checks prevent silently replacing a notebook edited elsewhere.
+
+The Apple notebook store indexes metadata with SwiftData and loads pages on demand. Page documents contain paper settings, typed text objects and raw PencilKit data. Android preserves fields it cannot interpret and currently edits typed text only. Full notebook creation and semester archive viewing are not yet Android parity features.
+
+Activity entries are private payloads under `users/{uid}/activity/{id}` with server commit timestamps. Use immutable entry IDs and do not log passwords, OAuth tokens or private credentials. Android currently uploads its own journal; its full history UI is not implemented.
+
+## Glanceable surfaces
+
+Apple widgets/Live Activities use a saved shared schedule surface, not a Firebase request on each refresh. Android's `ScheduleWidget` uses the local snapshot and selects one or three days based on widget height. OS refresh policy means widgets and reminders are not precise delivery guarantees.
+
+## Attendance
+
+Unmarked means unknown. Official duty counts as present. Fingerprint and sheet confirmation remain distinct from attendance. The current configurable app policy can penalize a fingerprint/sheet mismatch by marking the next three scheduled classes missed; this is a user-facing planning rule, not a connection to institutional records. Keep all affected classes visible in the timetable.

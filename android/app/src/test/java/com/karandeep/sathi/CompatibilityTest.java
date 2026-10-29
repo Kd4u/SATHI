@@ -1,0 +1,161 @@
+package com.karandeep.sathi;
+
+import static org.junit.Assert.*;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.time.*;
+import java.util.*;
+import java.util.zip.*;
+import org.json.*;
+import org.junit.Test;
+
+public class CompatibilityTest {
+  String value(String text) throws Exception {
+    return Snapshot.value(new JSONObject().put("text", text));
+  }
+
+  @Test
+  public void swiftWireRoundTripPreservesUnknownRecords() throws Exception {
+    Map<String, String> records =
+        new TreeMap<>(
+            Map.of(
+                "future:record",
+                value("हिन्दी and notes"),
+                "attendance:Sheet1-C4-0",
+                Base64.getEncoder()
+                    .encodeToString("\"Attended\"".getBytes(StandardCharsets.UTF_8))));
+    assertEquals(records, Snapshot.decode(Snapshot.encode(records)));
+    assertEquals("\"Attended\"", Snapshot.text(records, "attendance:Sheet1-C4-0"));
+  }
+
+  @Test
+  public void mergeRetainsOtherDeviceChangesAndDeletion() throws Exception {
+    Map<String, String> base = Map.of("a", value("original"), "b", value("delete"));
+    Map<String, String> local = Map.of("a", value("edited"));
+    Map<String, String> remote = new TreeMap<>(base);
+    remote.put("c", value("other phone"));
+    Map<String, String> merged = Snapshot.merge(base, local, remote);
+    assertFalse(merged.containsKey("b"));
+    assertEquals(local.get("a"), merged.get("a"));
+    assertEquals(remote.get("c"), merged.get("c"));
+  }
+
+  @Test
+  public void conflictingDeviceEditsNeverSilentlyWin() throws Exception {
+    try {
+      Snapshot.merge(
+          Map.of("a", value("base")), Map.of("a", value("local")), Map.of("a", value("remote")));
+      fail("Expected conflict");
+    } catch (Exception e) {
+      assertTrue(e.getMessage().contains("Both devices changed"));
+    }
+  }
+
+  @Test
+  public void localEditsDuringSyncStayQueued() throws Exception {
+    Map<String, String> captured = Map.of("a", value("before"));
+    Map<String, String> current = Map.of("a", value("typing"));
+    Map<String, String> merged = new TreeMap<>(captured);
+    merged.put("b", value("remote"));
+    Map<String, String> next = Snapshot.merge(captured, current, merged);
+    assertEquals(current.get("a"), next.get("a"));
+    assertEquals(merged.get("b"), next.get("b"));
+  }
+
+  JSONObject session(String id, String date, int hour) throws Exception {
+    return new JSONObject()
+        .put("id", id)
+        .put("date", date)
+        .put("time", hour + ":00 – " + (hour + 1) + ":00")
+        .put("subject", "Course")
+        .put("section", "");
+  }
+
+  @Test
+  public void attendanceRulesMatchAppleIncludingThreeClassPenaltyAndOD() throws Exception {
+    List<JSONObject> sessions = new ArrayList<>();
+    for (int i = 0; i < 5; i++) sessions.add(session("s" + i, "2020-01-01", 8 + i));
+    Map<String, String> records = new TreeMap<>();
+    records.put(
+        "study:proof:s0",
+        Snapshot.value(
+            new JSONObject()
+                .put("attended", true)
+                .put("fingerprint", true)
+                .put("signedSheet", false)));
+    Set<String> penalties = Schedule.penalties(sessions, records);
+    assertEquals(Set.of("s1", "s2", "s3"), penalties);
+    assertEquals("Missed", Schedule.status(sessions.get(0), records, penalties));
+    assertEquals("Unmarked", Schedule.status(sessions.get(4), records, penalties));
+    records.put("study:proof:s1", Snapshot.value(new JSONObject().put("officialDuty", true)));
+    assertEquals("OD", Schedule.status(sessions.get(1), records, penalties));
+  }
+
+  @Test
+  public void examDayIsOneEventNotEight() throws Exception {
+    JSONArray events = new JSONArray();
+    for (int i = 0; i < 8; i++)
+      events.put(
+          new JSONObject()
+              .put("date", "2026-10-27")
+              .put("time", (8 + i) + ":00")
+              .put("title", "END TERM EXAMINATIONS"));
+    Map<String, String> records =
+        Map.of(
+            "timetable",
+            Snapshot.value(
+                new JSONObject()
+                    .put("sessions", new JSONArray())
+                    .put("subjects", new JSONArray())
+                    .put("events", events)));
+    assertEquals(1, Schedule.events(records, "2026-10-27").size());
+    assertEquals("All day", Schedule.events(records, "2026-10-27").get(0).getString("time"));
+  }
+
+  @Test
+  public void xlsxParserRetainsSwiftCellIdentifiersAndSeparatesEvents() throws Exception {
+    Map<String, String> files = new LinkedHashMap<>();
+    files.put(
+        "xl/workbook.xml",
+        "<workbook xmlns:r='urn:relationships'><sheets><sheet name='Section A'"
+            + " r:id='rId1'/></sheets></workbook>");
+    files.put(
+        "xl/_rels/workbook.xml.rels",
+        "<Relationships><Relationship Id='rId1' Target='worksheets/sheet1.xml'/></Relationships>");
+    files.put(
+        "xl/worksheets/sheet1.xml",
+        "<worksheet><sheetData><row r='1'>"
+            + cell("A1", "Date")
+            + cell("B1", "Day")
+            + cell("C1", "09:00-10:00")
+            + "</row><row r='2'>"
+            + cell("A2", "2026-10-27")
+            + cell("B2", "Tuesday")
+            + cell("C2", "Course (Sec A)")
+            + "</row><row r='3'>"
+            + cell("C3", "Prof. Example")
+            + "</row><row r='4'>"
+            + cell("A4", "2026-10-28")
+            + cell("C4", "END TERM EXAMINATIONS")
+            + "</row></sheetData></worksheet>");
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+      for (String name : files.keySet()) {
+        zip.putNextEntry(new ZipEntry(name));
+        zip.write(files.get(name).getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+    }
+    JSONObject report = ExcelImport.read(bytes.toByteArray(), "fixture.xlsx");
+    JSONObject s = report.getJSONArray("sessions").getJSONObject(0);
+    assertEquals("Sheet1-C2-0", s.getString("id"));
+    assertEquals("Course", s.getString("subject"));
+    assertEquals("A", s.getString("section"));
+    assertEquals(1, report.getJSONArray("events").length());
+  }
+
+  String cell(String address, String value) {
+    return "<c r='" + address + "' t='inlineStr'><is><t>" + value + "</t></is></c>";
+  }
+}
