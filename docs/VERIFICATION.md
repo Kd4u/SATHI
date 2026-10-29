@@ -26,3 +26,7 @@ The public source removes the maintainer's backend/signing configuration and mak
 ## Public contributor copy checked on 2026-10-29
 
 The sanitized Android project built in Debug, passed lint and all seven unit tests without maintainer signing/configuration files. The Apple command-line domain runner passed merge, journal, account isolation, study/attendance, widget/cadence and notebook-foundation checks using the installed Swift toolchain. Public-source scanning passed after excluding private configuration and generated artifacts. These local results do not establish real OAuth/cloud behaviour or hosted CI success.
+
+## Hosted checks
+
+[GitHub Actions run 3](https://github.com/Kd4u/SATHI/actions/runs/40867526309) passed both jobs: Apple domain checks on macOS and Android setup/build/lint/unit checks on Ubuntu. This verifies contributor-source buildability and local logic, not real OAuth/cloud integration. The subsequent documentation and Windows launcher line-ending cleanup do not change application behaviour.

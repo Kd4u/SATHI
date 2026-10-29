@@ -3,6 +3,7 @@
 </p>
 
 <h1 align="center">SATHI</h1>
+<p align="center"><a href="https://github.com/Kd4u/SATHI/actions/workflows/ci.yml"><img src="https://github.com/Kd4u/SATHI/actions/workflows/ci.yml/badge.svg" alt="Source checks"></a></p>
 <p align="center">Your timetable, attendance and notes. One academic companion across your devices.</p>
 <p align="center">
   <a href="LICENSE">MIT licensed</a> ·
