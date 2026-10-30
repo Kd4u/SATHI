@@ -16,6 +16,21 @@ public class CompatibilityTest {
   }
 
   @Test
+  public void fingerprintAndSheetMergeAcrossDevicesAndKeepRealDisagreements() throws Exception {
+    String key = "study:proof:class1";
+    String base = Snapshot.value(new JSONObject().put("officialDuty",false).put("updatedAt",1));
+    String finger = Snapshot.value(new JSONObject().put("officialDuty",false).put("fingerprint",true).put("updatedAt",2));
+    String signed = Snapshot.value(new JSONObject().put("officialDuty",false).put("signedSheet",true).put("updatedAt",3));
+    Snapshot.Exchange exchange = Snapshot.exchange(Map.of(key,base), Map.of(key,finger), Map.of(key,signed), null);
+    JSONObject proof = Snapshot.object(exchange.cloud,key);
+    assertTrue(exchange.conflicts.isEmpty());
+    assertTrue(proof.getBoolean("fingerprint")); assertTrue(proof.getBoolean("signedSheet")); assertTrue(proof.getBoolean("attended"));
+    String no = Snapshot.value(new JSONObject().put("officialDuty",false).put("fingerprint",false).put("updatedAt",3));
+    assertTrue(Snapshot.exchange(Map.of(key,base), Map.of(key,finger), Map.of(key,no), null).conflicts.contains(key));
+    assertTrue(Snapshot.sameRecords(exchange.cloud, Snapshot.merge(Map.of(key,base), Map.of(key,finger), Map.of(key,signed))));
+  }
+
+  @Test
   public void verifiedLegacySupplementCannotRegressAndDoesNotUndoCancellations() throws Exception {
     JSONObject one = session("c1", "2026-11-01", 9).put("source", "Sheet1!C2");
     JSONObject two = session("j1", "2026-11-01", 21).put("source", "Sheet1!J2");

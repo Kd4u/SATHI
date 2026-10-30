@@ -284,7 +284,7 @@ struct ContentView: View {
         .sheet(isPresented: Binding(get: { attendanceWindow != nil }, set: { if !$0 { attendanceWindow = nil } })) {
             if let window = attendanceWindow {
                 ClassAttendanceView(window: window, proof: Binding(get: { study.workspace.proofs[window.id] ?? .init() }, set: { study.workspace.proofs[window.id] = $0 }), penalized: penaltyIDs.contains(window.id)) {
-                    saveStudy(); attendanceWindow = nil
+                    saveStudy(); attendanceWindow = nil; Task { await syncNow() }
                 }
             }
         }
@@ -1222,6 +1222,7 @@ struct ContentView: View {
             var proof = study.workspace.proofs[id] ?? .init()
             proof.fingerprint = true; proof.updatedAt = Date(); study.workspace.proofs[id] = proof
             saveStudy()
+            Task { await syncNow() }
         }
         selectedDate = window.start
         attendanceWindow = window

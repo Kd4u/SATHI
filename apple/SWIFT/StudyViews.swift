@@ -115,7 +115,10 @@ struct ClassAttendanceView: View {
                 proofPicker("Attendance sheet signed", value: $proof.signedSheet)
                 Text("These are your own records, not a connection to the institute's attendance system. You can correct them later. An unanswered proof stays unresolved.").font(.caption).foregroundStyle(.secondary)
                 Text("After class, exactly one completed proof means the next three scheduled classes receive no attendance credit. OD still counts as present.").font(.caption)
-                Button("Save attendance") { proof.updatedAt = Date(); onSave() }.buttonStyle(.borderedProminent)
+                Button("Save attendance") {
+                    if proof.fingerprint == true && proof.signedSheet == true && proof.attended == nil { proof.attended = true }
+                    proof.updatedAt = Date(); onSave()
+                }.buttonStyle(.borderedProminent)
             }
         }.formStyle(.grouped).frame(minWidth: 300)
     }

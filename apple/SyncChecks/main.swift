@@ -64,3 +64,27 @@ print("Verified complete imports cannot regress to a matching partial cloud copy
 
 let verifiedSmaller = try tableRecord(["C2"], revision: 2)
 assert(SyncSnapshot.completeTimetable(verifiedSmaller, completeTable) == nil)
+
+let proofKey = "study:proof:Sheet1-C2-0"
+let proofBase = snapshot([proofKey: "{\"officialDuty\":false,\"updatedAt\":1}"])
+let fingerprintDevice = snapshot([proofKey: "{\"officialDuty\":false,\"fingerprint\":true,\"updatedAt\":2}"])
+let signedDevice = snapshot([proofKey: "{\"officialDuty\":false,\"signedSheet\":true,\"updatedAt\":3}"])
+let proofPlan = try SyncExchange.prepare(base: proofBase, local: fingerprintDevice, remote: signedDevice)
+let proofObject = try JSONSerialization.jsonObject(with: proofPlan.cloud.records[proofKey]!) as! [String: Any]
+assert(proofPlan.conflicts.isEmpty && proofObject["fingerprint"] as? Bool == true && proofObject["signedSheet"] as? Bool == true && proofObject["attended"] as? Bool == true)
+let proofNo = snapshot([proofKey: "{\"officialDuty\":false,\"fingerprint\":false,\"updatedAt\":3}"])
+let contestedProof = try SyncExchange.prepare(base: proofBase, local: fingerprintDevice, remote: proofNo)
+assert(contestedProof.conflicts == [proofKey])
+let proofRetry = try SyncExchange.prepare(base: proofPlan.checkpoint, local: proofPlan.local, remote: proofPlan.cloud)
+assert(proofRetry.cloud == proofPlan.cloud && proofRetry.conflicts.isEmpty)
+let inFlightProof = try SyncSnapshot.merge(base: proofBase, local: fingerprintDevice, remote: signedDevice)
+assert(SyncSnapshot.equivalent(inFlightProof.records[proofKey], proofPlan.cloud.records[proofKey]))
+print("Fingerprint and sheet merge across devices, retain same-field disagreements, derive attended and survive retries/in-flight edits.")
+
+let missedBefore = snapshot([proofKey: "{\"attended\":false,\"officialDuty\":false,\"updatedAt\":1}"])
+let missedFingerprint = snapshot([proofKey: "{\"attended\":false,\"officialDuty\":false,\"fingerprint\":true,\"updatedAt\":2}"])
+let missedSheet = snapshot([proofKey: "{\"attended\":false,\"officialDuty\":false,\"signedSheet\":true,\"updatedAt\":3}"])
+let missedMerge = try SyncExchange.prepare(base: missedBefore, local: missedFingerprint, remote: missedSheet)
+let missedJSON = try JSONSerialization.jsonObject(with: missedMerge.cloud.records[proofKey]!) as! [String:Any]
+assert(missedJSON["attended"] as? Bool == false)
+print("Proof completion does not override an explicit missed-class record.")

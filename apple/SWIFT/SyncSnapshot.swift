@@ -37,6 +37,33 @@ nonisolated struct SyncSnapshot: Codable, Equatable {
         return ar.count > br.count ? lhs : rhs
     }
 
+    /// Merge independent proof fields; preserve an explicit disagreement on the same field.
+    static func mergeProof(base: Data?, local: Data?, remote: Data?) -> Data? {
+        guard let local, let remote,
+              let left = try? JSONSerialization.jsonObject(with: local) as? [String: Any],
+              let right = try? JSONSerialization.jsonObject(with: remote) as? [String: Any] else { return nil }
+        let before = base.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
+        func field(_ object: [String: Any], _ key: String) -> Data? {
+            let value = object[key] ?? (key == "officialDuty" ? false : NSNull())
+            if value is NSNull { return nil }
+            return try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .sortedKeys])
+        }
+        var merged = right
+        for key in Set(before.keys).union(left.keys).union(right.keys) where key != "updatedAt" {
+            let old = field(before, key), mine = field(left, key), theirs = field(right, key)
+            guard !equivalent(old, mine) else { continue }
+            guard equivalent(theirs, old) || equivalent(theirs, mine) else { return nil }
+            merged[key] = left[key]
+        }
+        let latest = [before, left, right].compactMap { ($0["updatedAt"] as? NSNumber)?.doubleValue }.max() ?? 0
+        merged["updatedAt"] = latest
+        if merged["officialDuty"] == nil { merged["officialDuty"] = false }
+        if (merged["fingerprint"] as? Bool) == true && (merged["signedSheet"] as? Bool) == true && (merged["attended"] as? Bool) != false {
+            merged["attended"] = true
+        }
+        return try? JSONSerialization.data(withJSONObject: merged, options: [.sortedKeys])
+    }
+
     static func merge(base: Self, local: Self, remote: Self, resolving: SyncConflictResolution? = nil) throws -> Self {
         var result = remote
         for key in Set(base.records.keys).union(local.records.keys).sorted() {
@@ -45,6 +72,9 @@ nonisolated struct SyncSnapshot: Codable, Equatable {
             guard !equivalent(before, after) else { continue }
             let cloud = remote.records[key]
             guard equivalent(cloud, before) || equivalent(cloud, after) else {
+                if key.hasPrefix("study:proof:"), let proof = mergeProof(base: before, local: after, remote: cloud) {
+                    result.records[key] = proof; continue
+                }
                 switch resolving {
                 case .local: result.records[key] = after; continue
                 case .remote: continue
@@ -79,6 +109,14 @@ nonisolated struct SyncExchange: Codable {
         var local = local, remote = remote
         if let complete = SyncSnapshot.completeTimetable(local.records["timetable"], remote.records["timetable"]) {
             local.records["timetable"] = complete; remote.records["timetable"] = complete
+        }
+        for key in Set(local.records.keys).intersection(remote.records.keys) where key.hasPrefix("study:proof:") {
+            if !SyncSnapshot.equivalent(base.records[key], local.records[key]),
+               !SyncSnapshot.equivalent(base.records[key], remote.records[key]),
+               !SyncSnapshot.equivalent(local.records[key], remote.records[key]),
+               let proof = SyncSnapshot.mergeProof(base: base.records[key], local: local.records[key], remote: remote.records[key]) {
+                local.records[key] = proof; remote.records[key] = proof
+            }
         }
         if let resolving {
             let merged = try SyncSnapshot.merge(base: base, local: local, remote: remote, resolving: resolving)

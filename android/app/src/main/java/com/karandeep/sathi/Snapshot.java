@@ -58,6 +58,34 @@ public final class Snapshot {
     return Objects.equals(a, b);
   }
 
+  static String mergeProof(String base, String local, String remote) {
+    if (local == null || remote == null) return null;
+    try {
+      JSONObject left = new JSONObject(new String(Base64.getDecoder().decode(local), StandardCharsets.UTF_8));
+      JSONObject right = new JSONObject(new String(Base64.getDecoder().decode(remote), StandardCharsets.UTF_8));
+      JSONObject before = base == null ? new JSONObject() : new JSONObject(new String(Base64.getDecoder().decode(base), StandardCharsets.UTF_8));
+      JSONObject merged = new JSONObject(right.toString());
+      Set<String> fields = new TreeSet<>();
+      for (JSONObject object : List.of(before, left, right)) object.keys().forEachRemaining(fields::add);
+      fields.remove("updatedAt");
+      for (String field : fields) {
+        Object old = proofField(before, field), mine = proofField(left, field), theirs = proofField(right, field);
+        if (jsonEqual(old, mine)) continue;
+        if (!jsonEqual(theirs, old) && !jsonEqual(theirs, mine)) return null;
+        if (left.has(field)) merged.put(field, left.get(field)); else merged.remove(field);
+      }
+      merged.put("updatedAt", Math.max(before.optDouble("updatedAt",0), Math.max(left.optDouble("updatedAt",0), right.optDouble("updatedAt",0))));
+      if (!merged.has("officialDuty")) merged.put("officialDuty", false);
+      if (merged.optBoolean("fingerprint") && merged.optBoolean("signedSheet") && (!merged.has("attended") || merged.optBoolean("attended"))) merged.put("attended", true);
+      return value(merged);
+    } catch (Exception e) { return null; }
+  }
+
+  private static Object proofField(JSONObject object, String key) {
+    Object value = object.opt(key);
+    return value == null || value == JSONObject.NULL ? (key.equals("officialDuty") ? false : null) : value;
+  }
+
   public static boolean sameRecords(Map<String, String> a, Map<String, String> b) {
     if (!a.keySet().equals(b.keySet())) return false;
     for (String key : a.keySet()) if (!equivalent(a.get(key), b.get(key))) return false;
@@ -105,6 +133,12 @@ public final class Snapshot {
       local = new TreeMap<>(local); remote = new TreeMap<>(remote);
       local.put("timetable", complete); remote.put("timetable", complete);
     }
+    local = new TreeMap<>(local); remote = new TreeMap<>(remote);
+    for (String key : new HashSet<>(local.keySet())) if (key.startsWith("study:proof:") && remote.containsKey(key)
+        && !equivalent(base.get(key), local.get(key)) && !equivalent(base.get(key), remote.get(key)) && !equivalent(local.get(key), remote.get(key))) {
+      String proof = mergeProof(base.get(key), local.get(key), remote.get(key));
+      if (proof != null) { local.put(key, proof); remote.put(key, proof); }
+    }
     if (preferLocal != null) {
       Map<String, String> merged = merge(base, local, remote, preferLocal);
       return new Exchange(merged, merged, merged, Set.of());
@@ -143,6 +177,10 @@ public final class Snapshot {
       String before = base.get(key), after = local.get(key), cloud = remote.get(key);
       if (equivalent(before, after)) continue;
       if (!equivalent(cloud, before) && !equivalent(cloud, after)) {
+        if (key.startsWith("study:proof:")) {
+          String proof = mergeProof(before, after, cloud);
+          if (proof != null) { result.put(key, proof); continue; }
+        }
         if (preferLocal != null) {
           if (preferLocal) {
             if (after == null) result.remove(key); else result.put(key, after);

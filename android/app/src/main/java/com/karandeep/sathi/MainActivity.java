@@ -637,6 +637,7 @@ public class MainActivity extends Activity {
       };
       String[] keys = {"attended", "fingerprint", "signedSheet", "officialDuty"};
       Spinner[] choices = new Spinner[4];
+      int[] initial = new int[4];
       for (int i = 0; i < 4; i++) {
         form.addView(text(names[i], 14, ink, true));
         Spinner choice = new Spinner(this);
@@ -651,6 +652,7 @@ public class MainActivity extends Activity {
                 : proof.has(keys[i]) ? (proof.optBoolean(keys[i]) ? 1 : 2) : 0);
         form.addView(choice, new LinearLayout.LayoutParams(-1, dp(48)));
         choices[i] = choice;
+        initial[i] = choice.getSelectedItemPosition();
       }
       form.addView(
           text(
@@ -668,15 +670,19 @@ public class MainActivity extends Activity {
               "Save",
               (d, w) -> {
                 try {
+                  JSONObject fresh = store.object(key);
                   for (int i = 0; i < 4; i++) {
                     int value = choices[i].getSelectedItemPosition();
-                    if (i == 3) proof.put(keys[i], value == 1);
-                    else if (value == 0) proof.remove(keys[i]);
-                    else proof.put(keys[i], value == 1);
+                    if (value == initial[i]) continue;
+                    if (i == 3) fresh.put(keys[i], value == 1);
+                    else if (value == 0) fresh.remove(keys[i]);
+                    else fresh.put(keys[i], value == 1);
                   }
-                  proof.put("updatedAt", Snapshot.swiftNow());
-                  store.put(key, proof);
-                  status = "Attendance saved locally";
+                  if (fresh.optBoolean("fingerprint") && fresh.optBoolean("signedSheet") && !fresh.has("attended") && choices[0].getSelectedItemPosition() == initial[0]) fresh.put("attended", true);
+                  fresh.put("updatedAt", Snapshot.swiftNow());
+                  store.put(key, fresh);
+                  status = "Attendance saved; syncing confirmations…";
+                  sync(false);
                   ScheduleWidget.refresh(this);
                   render();
                 } catch (Exception e) {

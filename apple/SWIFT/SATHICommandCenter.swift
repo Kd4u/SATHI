@@ -666,12 +666,14 @@ struct SATHICommandCenter: View {
         let proof = study.workspace.proofs[id] ?? .init()
         return Button {
             var value = proof; value[keyPath: keyPath] = proof[keyPath: keyPath] != true
-            if value.fingerprint == true && value.signedSheet == true { value.attended = true }
-            value.updatedAt = Date(); study.workspace.proofs[id] = value; try? study.saveWorkspace()
+            if value.fingerprint == true && value.signedSheet == true && value.attended != false { value.attended = true }
+            value.updatedAt = Date(); study.workspace.proofs[id] = value
+            do { try study.saveWorkspace(); onSync() }
+            catch { study.recordAction("proof_save_failed") }
         } label: {
             Label(title, systemImage: symbol).font(.caption).foregroundStyle(proof[keyPath: keyPath] == true ? Color.accentColor : .secondary)
                 .padding(7).background(proof[keyPath: keyPath] == true ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.035), in: Capsule())
-        }.buttonStyle(.plain)
+        }.buttonStyle(.plain).accessibilityValue(proof[keyPath: keyPath] == true ? "Recorded" : "Not recorded")
     }
     private typealias LectureTileItem = (id: String, date: String, time: String, label: String, title: String)
     private func lectureTileItems(_ subject: TimetableSubject) -> [LectureTileItem] {
