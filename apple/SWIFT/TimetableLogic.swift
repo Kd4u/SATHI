@@ -66,18 +66,49 @@ struct TimetableLogic {
             let header = byRow[headerRow] ?? [:]
             let sheetSection = TimetableSection.label(in: sheetName)
             let explicitSections = Set(rowNumbers.filter { $0 < headerRow }.flatMap { (byRow[$0] ?? [:]).values.map { TimetableSection.label(in: $0.text) } }.filter { !$0.isEmpty })
-            let inheritedSection = !sheetSection.isEmpty ? sheetSection : (explicitSections.count == 1 ? explicitSections.first! : "")
+            let hasInlineSections = byRow.values.contains { row in row.values.contains { !extractSection($0.text).1.isEmpty } }
+            let inheritedSection = hasInlineSections ? "" : (!sheetSection.isEmpty ? sheetSection : (explicitSections.count == 1 ? explicitSections.first! : ""))
             let dateColumn = header.first { $0.value.text.lowercased() == "date" }?.key ?? 1
             let dayColumn = header.first { $0.value.text.lowercased() == "day" }?.key ?? 2
-            let timeColumns: [(Int, String)] = header.compactMap { column, cell in
+            var timeColumns: [(Int, String)] = header.compactMap { column, cell in
                 isTimeSlot(cell.text) ? (column, cell.text) : nil
             }.sorted { $0.0 < $1.0 }
 
+            // A few supplied schedules omit the end of the last slot. Infer only
+            // from a complete preceding slot and surface that inference for review.
+            for (column, cell) in header.sorted(by: { $0.key < $1.key }) where !isTimeSlot(cell.text) {
+                if cell.text.range(of: #"^\d{1,2}:\d{2}$"#, options: .regularExpression) != nil,
+                   let previous = timeColumns.last, column == previous.0 + 1 {
+                    let clocks = previous.1.components(separatedBy: "-")
+                    func minutes(_ clock: String) -> Int? {
+                        let parts = clock.trimmingCharacters(in: .whitespaces).split(separator: ":").compactMap { Int($0) }
+                        return parts.count == 2 ? parts[0] * 60 + parts[1] : nil
+                    }
+                    if clocks.count == 2, let start = minutes(clocks[0]), let end = minutes(clocks[1]),
+                       let next = minutes(cell.text), end > start, next + end - start < 1440 {
+                        let finish = next + end - start
+                        let slot = cell.text + String(format: "-%02d:%02d", finish / 60, finish % 60)
+                        timeColumns.append((column, slot))
+                        warnings.append("\(sheetName)!\(cell.address): inferred end time \(slot); verify against the official schedule")
+                    }
+                }
+            }
             guard !timeColumns.isEmpty else {
                 warnings.append("\(sheetName): no time-slot headers detected")
                 continue
             }
 
+            // Only reuse a course identity seen with explicit faculty elsewhere in this sheet.
+            var knownCourses = Set<String>()
+            for number in rowNumbers where number > headerRow && !excelDate(byRow[number]?[dateColumn]?.text ?? "").isEmpty {
+                for (column, _) in timeColumns {
+                    let entries = splitEntries(byRow[number]?[column]?.text ?? "")
+                    let teachers = splitEntries(byRow[number + 1]?[column]?.text ?? "")
+                    if teachers.contains(where: isProfessor) {
+                        for entry in entries where !isTimeSlot(entry) { knownCourses.insert(extractSection(entry).0) }
+                    }
+                }
+            }
             for rowNumber in rowNumbers where rowNumber > headerRow {
                 let row = byRow[rowNumber] ?? [:]
                 let date = excelDate(row[dateColumn]?.text ?? "")
@@ -86,11 +117,14 @@ struct TimetableLogic {
                 let day = row[dayColumn]?.text ?? ""
                 let facultyRow = byRow[rowNumber + 1] ?? [:]
 
-                for (column, slot) in timeColumns {
+                for (column, defaultSlot) in timeColumns {
                     guard let cell = row[column] else { continue }
                     let source = "\(sheetName)!\(cell.address)"
                     let entries = splitEntries(cell.text)
                     guard !entries.isEmpty else { continue }
+                    let inlineSlot = entries.first.flatMap { isTimeSlot($0) ? $0 : nil }
+                    let slot = inlineSlot ?? defaultSlot
+                    let courseEntries = entries.filter { !isTimeSlot($0) }
                     let faculty = splitEntries(facultyRow[column]?.text ?? "")
 
                     // Whole-cell events can span several lines; preserve their title.
@@ -107,19 +141,21 @@ struct TimetableLogic {
                     }
 
                     for (index, entry) in entries.enumerated() {
+                        if isTimeSlot(entry) { continue }
+                        let courseIndex = courseEntries.firstIndex(of: entry) ?? index
                         let teacher: String
-                        if faculty.count == entries.count {
-                            teacher = faculty[index]
-                        } else if faculty.count == 1 && entries.count == 1 {
+                        if faculty.count == courseEntries.count {
+                            teacher = faculty[courseIndex]
+                        } else if faculty.count == 1 && courseEntries.count == 1 {
                             teacher = faculty[0]
-                        } else if faculty.count == 1 && entries.count > 1 && isProfessor(faculty[0]) {
+                        } else if faculty.count == 1 && courseEntries.count > 1 && isProfessor(faculty[0]) {
                             // One professor explicitly covers multiple subject/section entries.
                             teacher = faculty[0]
                         } else {
                             teacher = ""
                         }
 
-                        if looksLikeEvent(entry) {
+                        if looksLikeEvent(entry) && !isProfessor(teacher) && !knownCourses.contains(extractSection(entry).0) {
                             events.append(TimetableEvent(
                                 date: date, time: slot, title: entry, source: source
                             ))
@@ -128,7 +164,7 @@ struct TimetableLogic {
 
                         // A real subject requires a professor in the row immediately below.
                         // Unpaired entries are displayed as events, never assigned credits.
-                        guard isProfessor(teacher) else {
+                        guard isProfessor(teacher) || knownCourses.contains(extractSection(entry).0) else {
                             events.append(TimetableEvent(
                                 date: date, time: slot, title: entry, source: source
                             ))
@@ -138,6 +174,9 @@ struct TimetableLogic {
                             continue
                         }
 
+                        if !isProfessor(teacher) {
+                            warnings.append("\(source): known course with missing/unconfirmed faculty; verify instructor")
+                        }
                         let (name, inlineSection) = extractSection(entry)
                         let section = inlineSection.isEmpty ? inheritedSection : inlineSection
                         guard !name.isEmpty else { continue }
@@ -191,6 +230,7 @@ struct TimetableLogic {
             "EXAM", "EXAMINATION", "MID TERM", "MID-TERM", "END TERM", "END-TERM",
             "BREAK", "VACATION", "INAUGURATION", "CONVOCATION",
             "NO CLASS", "PRESENTATION", "INTERNSHIP PRESENTATION",
+            "EID", "MILAD", "CHHATH", "CHATTH", "JAYANTI", "ELEGANTE", "CONCLAVE",
             "ORIENTATION", "INDUCTION", "SPORTS DAY", "CULTURAL DAY"
         ]
         return phrases.contains { normalized.contains($0) }
@@ -258,23 +298,13 @@ struct TimetableLogic {
 
     private func isProfessor(_ text: String) -> Bool {
         text.range(
-            of: #"(?i)^\s*(?:prof\.?|professor)\s+"#,
+            of: #"(?i)^\s*(?:professor|prof\.?|dr\.?|mr\.?|mrs\.?|ms\.?)\s+"#,
             options: .regularExpression
         ) != nil
     }
 
     private func extractSection(_ raw: String) -> (String, String) {
-        let pattern = #"(?i)\(\s*sec(?:tion)?\s*[-:]?\s*([A-Z])\s*\)"#
-        guard let range = raw.range(of: pattern, options: .regularExpression) else {
-            return (raw.trimmingCharacters(in: .whitespacesAndNewlines), "")
-        }
-        let sectionText = String(raw[range])
-        let section = String(
-            sectionText.dropLast().trimmingCharacters(in: .whitespaces).suffix(1)
-        ).uppercased()
-        var name = raw
-        name.removeSubrange(range)
-        return (name.trimmingCharacters(in: .whitespacesAndNewlines), section)
+        TimetableIdentity.course(raw)
     }
 
     private func credits(for count: Int) -> Double {
