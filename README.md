@@ -29,12 +29,12 @@ This is an independent student project, not an official IIM Bodh Gaya applicatio
 - **Plan your day:** Today, calendar, classes, campus events and custom events.
 - **Import once:** Excel `.xlsx` import with section and subject selection. A compatible cloud account can restore the saved timetable on another device.
 - **Track attendance:** record class attendance, fingerprint and sheet confirmation, and official duty. Unmarked classes stay unmarked.
-- **Keep notes:** Apple notebooks support typed text and PencilKit drawing. Android supports quick notes and typed text in existing pages while preserving Apple drawing data.
+- **Keep notes:** Apple notebooks support typed text and PencilKit drawing. Android includes native pen/eraser, typing, portable image/shape layers and page management while preserving Apple drawing data. PencilKit binary strokes remain editable on Apple.
 - **Save locally first:** the app opens its saved copy immediately. Cloud sync is explicit or roughly hourly when the operating system permits.
 - **Glance at your schedule:** Apple widgets and an Android Home Screen widget use the saved timetable. Taller Android widgets show three days.
 - **Make it yours:** dark/light appearance, accent colours and optional reminders.
 
-The latest Apple experience adds manual day/week timetable review, whole-schedule browsing, lecture tiles, optional proof shortcuts, local campus documents and an optional notebook Pro canvas. See [scope and verification](docs/EXPERIENCE_UPDATE.md) for platform differences. Android includes shared manual-selection compatibility, optional crosschecks, wallpaper accents and expanded activity types.
+The latest Apple experience adds manual day/week timetable review, whole-schedule browsing, lecture tiles, optional proof shortcuts, local campus documents and an optional notebook Pro canvas. See [scope and verification](docs/EXPERIENCE_UPDATE.md) for platform differences. Android now includes manual timetable review, lecture tiles, proof shortcuts, native Material 3 controls, wallpaper accents, activity rescheduling and notebook page editing. See [Android parity and limits](docs/ANDROID-PARITY.md).
 
 SATHI does not connect to a college's biometric or official attendance system. Fingerprint and attendance-sheet entries are personal records. Local AI/chat and bundled language models are not part of this project.
 

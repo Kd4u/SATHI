@@ -35,7 +35,8 @@ public final class Schedule {
     JSONObject manualSets = prefs.optJSONObject("manualSelections");
     JSONArray manualList = manualSets == null ? null : manualSets.optJSONArray(current);
     Set<String> manual = new HashSet<>();
-    if (manualList != null) for (int i = 0; i < manualList.length(); i++) manual.add(manualList.optString(i));
+    if (manualList != null)
+      for (int i = 0; i < manualList.length(); i++) manual.add(manualList.optString(i));
     Set<String> ids = new HashSet<>();
     if (sessions != null)
       for (int i = 0; i < sessions.length(); i++) {
@@ -43,10 +44,14 @@ public final class Schedule {
         String id = s.getString("id");
         ids.add(id);
         if (manualList != null && !manual.contains(id)) continue;
-        if (manualList == null && !programme(s.optString("source")).equals(prefs.optString("programme", "MBA"))) continue;
-        if (manualList == null && semester >= 4
+        if (manualList == null
+            && !programme(s.optString("source")).equals(prefs.optString("programme", "MBA")))
+          continue;
+        if (manualList == null
+            && semester >= 4
             && !selected.contains(s.optString("subject") + "|" + s.optString("section"))) continue;
-        if (manualList == null && semester < 4
+        if (manualList == null
+            && semester < 4
             && !section.isEmpty()
             && !s.optString("section").isEmpty()
             && !section.equalsIgnoreCase(s.optString("section"))) continue;
@@ -94,15 +99,27 @@ public final class Schedule {
     if (a != null)
       for (int i = 0; i < a.length(); i++) {
         JSONObject e = new JSONObject(a.getJSONObject(i).toString());
+        String id = e.optString("id", "excel-" + e.optString("source") + "-" + e.optString("time"));
+        e.put("id", id);
+        JSONObject override = Snapshot.object(records, "study:override:" + id);
+        String term = Snapshot.object(records, "study:semesters").optString("current");
+        if (!override.optString("id").isEmpty()
+            && (!override.has("semesterID") || override.optString("semesterID").equals(term))) {
+          if (override.optBoolean("cancelled")) continue;
+          e.put("date", override.optString("date", e.optString("date")))
+              .put("time", override.optString("start") + " – " + override.optString("end"));
+          if (!override.optString("title").isEmpty()) e.put("title", override.getString("title"));
+        }
         if (!date.equals(e.optString("date"))) continue;
         String title = e.optString("title").trim().replaceAll("\\s+", " ");
         String upper = title.toUpperCase(Locale.ROOT);
         boolean allDay =
-            upper.contains("END TERM")
-                || upper.contains("END-TERM")
-                || upper.contains("HOLIDAY")
-                || upper.contains("VACATION")
-                || upper.contains("MID TERM");
+            !records.containsKey("study:override:" + id)
+                && (upper.contains("END TERM")
+                    || upper.contains("END-TERM")
+                    || upper.contains("HOLIDAY")
+                    || upper.contains("VACATION")
+                    || upper.contains("MID TERM"));
         String key = allDay ? upper : title + e.optString("time");
         if (seen.add(key)) {
           if (allDay) e.put("time", "All day");
@@ -117,6 +134,9 @@ public final class Schedule {
           out.add(e);
         }
       }
+    out.sort(
+        Comparator.comparingLong((JSONObject row) -> instant(row, false))
+            .thenComparing(row -> row.optString("title")));
     return out;
   }
 
@@ -161,7 +181,8 @@ public final class Schedule {
   public static Set<String> penalties(List<JSONObject> windows, Map<String, String> records)
       throws Exception {
     Set<String> out = new HashSet<>();
-    if (!Snapshot.object(records, "study:preferences").optBoolean("proofCrosscheck", false)) return out;
+    if (!Snapshot.object(records, "study:preferences").optBoolean("proofCrosscheck", false))
+      return out;
     long now = System.currentTimeMillis();
     for (int i = 0; i < windows.size(); i++) {
       JSONObject s = windows.get(i);

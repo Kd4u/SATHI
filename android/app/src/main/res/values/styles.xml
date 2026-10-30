@@ -1,10 +1,8 @@
 <resources>
-    <style name="SathiTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="android:colorAccent">#1679C8</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowActionModeOverlay">true</item>
-        <item name="android:windowBackground">#F3F6FA</item>
-        <item name="android:windowLightNavigationBar">true</item>
+    <style name="SathiTheme" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#4267A9</item><item name="colorSecondary">#526683</item>
+        <item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">true</item><item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowSoftInputMode">adjustResize</item>
     </style>
 </resources>

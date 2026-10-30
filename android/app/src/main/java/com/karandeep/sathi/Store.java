@@ -31,35 +31,56 @@ public final class Store {
   private ListenerRegistration liveListener;
   private String listenerUID;
   private Map<String, String> lastServerSnapshot;
-  public synchronized boolean hasConflicts() { return hasConflicts; }
+
+  public synchronized boolean hasConflicts() {
+    return hasConflicts;
+  }
 
   public synchronized void stopLiveUpdates() {
     if (liveListener != null) liveListener.remove();
-    liveListener = null; listenerUID = null; lastServerSnapshot = null;
+    liveListener = null;
+    listenerUID = null;
+    lastServerSnapshot = null;
   }
 
   public synchronized void startLiveUpdates(Completion callback) {
     if (owner.isEmpty() || owner.equals(listenerUID)) return;
     stopLiveUpdates();
-    final String uid = owner; listenerUID = uid;
-    liveListener = FirebaseFirestore.getInstance().collection("users").document(uid)
-      .collection("sathi").document("snapshot").addSnapshotListener((doc, error) -> {
-        boolean changed = false;
-        synchronized (Store.this) {
-          if (!owner.equals(uid) || !uid.equals(listenerUID)) return;
-          if (error != null) { callback.done("Live sync unavailable: " + error.getMessage(), false); return; }
-          if (doc == null || doc.getMetadata().hasPendingWrites() || doc.getMetadata().isFromCache()) return;
-          try {
-            Blob payload = doc.getBlob("payload");
-            if (payload == null) return;
-            Map<String, String> incoming = Snapshot.decode(payload.toBytes());
-            if (lastServerSnapshot != null && Snapshot.sameRecords(lastServerSnapshot, incoming)) return;
-            lastServerSnapshot = incoming;
-            changed = !Snapshot.sameRecords(baseline, incoming);
-          } catch (Exception e) { callback.done("Live update could not be read; saved data retained", false); return; }
-        }
-        if (changed) callback.done("Cloud changes available", true);
-      });
+    final String uid = owner;
+    listenerUID = uid;
+    liveListener =
+        FirebaseFirestore.getInstance()
+            .collection("users")
+            .document(uid)
+            .collection("sathi")
+            .document("snapshot")
+            .addSnapshotListener(
+                (doc, error) -> {
+                  boolean changed = false;
+                  synchronized (Store.this) {
+                    if (!owner.equals(uid) || !uid.equals(listenerUID)) return;
+                    if (error != null) {
+                      callback.done("Live sync unavailable: " + error.getMessage(), false);
+                      return;
+                    }
+                    if (doc == null
+                        || doc.getMetadata().hasPendingWrites()
+                        || doc.getMetadata().isFromCache()) return;
+                    try {
+                      Blob payload = doc.getBlob("payload");
+                      if (payload == null) return;
+                      Map<String, String> incoming = Snapshot.decode(payload.toBytes());
+                      if (lastServerSnapshot != null
+                          && Snapshot.sameRecords(lastServerSnapshot, incoming)) return;
+                      lastServerSnapshot = incoming;
+                      changed = !Snapshot.sameRecords(baseline, incoming);
+                    } catch (Exception e) {
+                      callback.done("Live update could not be read; saved data retained", false);
+                      return;
+                    }
+                  }
+                  if (changed) callback.done("Cloud changes available", true);
+                });
   }
 
   public interface Completion {
@@ -123,6 +144,8 @@ public final class Store {
   public synchronized void put(String key, Object value) throws Exception {
     requireAccount();
     Map<String, String> next = new TreeMap<>(records);
+    if (key.startsWith("study:proof:") && value instanceof JSONObject)
+      value = ParityRules.normaliseProof((JSONObject) value);
     next.put(key, Snapshot.value(value));
     Snapshot.validate(next);
     atomic(new File(folder, "snapshot.json"), Snapshot.encode(next));
@@ -134,11 +157,34 @@ public final class Store {
       throws Exception {
     requireAccount();
     Map<String, String> next = new TreeMap<>(records);
-    // Replacing an active term silently would orphan attendance. Explicit archive first.
-    if (next.containsKey("timetable"))
-      throw new Exception(
-          "A timetable is already saved. Use the Apple app to archive/import the next semester,"
-              + " then Sync here. Your history stays intact.");
+    if (next.containsKey("timetable")) {
+      JSONObject prior = object("timetable");
+      if (ParityRules.containsAll(report, prior)) {
+        next.put("timetable", Snapshot.value(report));
+        Snapshot.validate(next);
+        atomic(new File(folder, "snapshot.json"), Snapshot.encode(next));
+        records = next;
+        journal(
+            "timetable_supplemented",
+            new JSONObject().put("classes", report.getJSONArray("sessions").length()));
+        return;
+      }
+      String oldID = object("study:semesters").optString("current");
+      if (oldID.isEmpty()) oldID = UUID.randomUUID().toString().toUpperCase(Locale.ROOT);
+      saveAsset(
+          "semester-" + oldID,
+          "semester",
+          "Semester " + object("selection").optInt("semester", 1),
+          "",
+          ParityRules.archive(records));
+      next.keySet()
+          .removeIf(
+              k ->
+                  k.startsWith("attendance:")
+                      || k.startsWith("event:")
+                      || k.startsWith("study:proof:")
+                      || k.startsWith("study:override:"));
+    }
     next.put("timetable", Snapshot.value(report));
     next.put(
         "selection",
@@ -165,11 +211,56 @@ public final class Store {
     next.put(
         "study:semesters",
         Snapshot.value(
-            new JSONObject().put("current", id).put("semesters", new JSONArray().put(summary))));
+            new JSONObject()
+                .put("current", id)
+                .put(
+                    "semesters",
+                    (object("study:semesters").optJSONArray("semesters") == null
+                            ? new JSONArray()
+                            : object("study:semesters").getJSONArray("semesters"))
+                        .put(summary))));
+    JSONObject preferences = object("study:preferences");
+    preferences.put("studentSemester", semester);
+    next.put("study:preferences", Snapshot.value(preferences));
     Snapshot.validate(next);
     atomic(new File(folder, "snapshot.json"), Snapshot.encode(next));
     records = next;
     journal("timetable_imported", new JSONObject().put("workbook", report.optString("workbook")));
+  }
+
+  public synchronized void remove(String key) throws Exception {
+    requireAccount();
+    Map<String, String> next = new TreeMap<>(records);
+    next.remove(key);
+    Snapshot.validate(next);
+    atomic(new File(folder, "snapshot.json"), Snapshot.encode(next));
+    records = next;
+    journal("record_deleted", new JSONObject().put("record", key));
+  }
+
+  public synchronized void replaceReviewedReport(JSONObject report, JSONArray selectedIDs)
+      throws Exception {
+    requireAccount();
+    JSONObject prefs = object("study:preferences"), sets = prefs.optJSONObject("manualSelections");
+    if (sets == null) sets = new JSONObject();
+    sets.put(object("study:semesters").getString("current"), selectedIDs);
+    prefs.put("manualSelections", sets);
+    Map<String, String> next = new TreeMap<>(records);
+    next.put("timetable", Snapshot.value(report));
+    next.put("study:preferences", Snapshot.value(prefs));
+    atomic(new File(folder, "timetable-before-review.json"), Snapshot.encode(records));
+    Snapshot.validate(next);
+    atomic(new File(folder, "snapshot.json"), Snapshot.encode(next));
+    records = next;
+  }
+
+  public synchronized File campusFile(String name) throws Exception {
+    requireAccount();
+    if (!name.matches("(menu|laundry)\\.(pdf|jpg|png)"))
+      throw new IOException("Invalid campus document");
+    File dir = new File(folder, "CampusDocuments");
+    if (!dir.exists() && !dir.mkdirs()) throw new IOException("Could not save campus document");
+    return new File(dir, name);
   }
 
   public synchronized void journal(String action, JSONObject details) throws Exception {
@@ -189,7 +280,9 @@ public final class Store {
     atomic(file, list.toString().getBytes(StandardCharsets.UTF_8));
   }
 
-  public void sync(Completion callback) { sync(callback, null); }
+  public void sync(Completion callback) {
+    sync(callback, null);
+  }
 
   public void sync(Completion callback, Boolean preferLocal) {
     final String uid;
@@ -221,7 +314,8 @@ public final class Store {
             if (!base.isEmpty() && local.isEmpty())
               throw new Exception(
                   "Local storage is unexpectedly empty. Sync stopped to protect cloud data.");
-            final File conflictBackup = new File(directory, "SyncConflictBackups/" + UUID.randomUUID());
+            final File conflictBackup =
+                new File(directory, "SyncConflictBackups/" + UUID.randomUUID());
             if (preferLocal != null) {
               if (!conflictBackup.mkdirs()) throw new IOException("Could not save conflict backup");
               atomic(new File(conflictBackup, "local.json"), Snapshot.encode(local));
@@ -247,12 +341,16 @@ public final class Store {
                             } else if (!base.isEmpty())
                               throw new Exception("Cloud snapshot is missing. Local data is safe.");
                             if (preferLocal != null)
-                              atomic(new File(conflictBackup, "remote-" + UUID.randomUUID() + ".json"), Snapshot.encode(remote));
-                            Snapshot.Exchange exchangeResult = Snapshot.exchange(base, local, remote, preferLocal);
+                              atomic(
+                                  new File(conflictBackup, "remote-" + UUID.randomUUID() + ".json"),
+                                  Snapshot.encode(remote));
+                            Snapshot.Exchange exchangeResult =
+                                Snapshot.exchange(base, local, remote, preferLocal);
                             byte[] bytes = Snapshot.encode(exchangeResult.cloud);
                             if (bytes.length >= 900000)
                               throw new Exception("Cloud snapshot exceeds size limit");
-                            if (!doc.exists() || !Snapshot.sameRecords(exchangeResult.cloud, remote))
+                            if (!doc.exists()
+                                || !Snapshot.sameRecords(exchangeResult.cloud, remote))
                               tx.set(
                                   ref,
                                   new HashMap<>(
@@ -285,7 +383,11 @@ public final class Store {
               lastSync = System.currentTimeMillis();
               context.getSharedPreferences("sync", 0).edit().putLong(uid, lastSync).apply();
             }
-            if (!exchange.conflicts.isEmpty()) message = "Other changes synced. Both devices changed " + String.join(", ", exchange.conflicts) + "; choose a version for these records.";
+            if (!exchange.conflicts.isEmpty())
+              message =
+                  "Other changes synced. Both devices changed "
+                      + String.join(", ", exchange.conflicts)
+                      + "; choose a version for these records.";
             uploadJournal(db, uid, directory);
             syncAssets(db, uid, directory);
             success = true;
@@ -365,7 +467,17 @@ public final class Store {
             .put("kind", kind)
             .put("title", title)
             .put("subject", subject)
-            .put("semesterID", object("study:semesters").optString("current"))
+            .put(
+                "semesterID",
+                old != null
+                    ? old.optString("semesterID", object("study:semesters").optString("current"))
+                    : data.optString(
+                        "semesterID",
+                        index.optJSONObject(data.optString("notebookID")) == null
+                            ? object("study:semesters").optString("current")
+                            : index
+                                .getJSONObject(data.getString("notebookID"))
+                                .optString("semesterID")))
             .put("revision", revision)
             .put("modifiedAt", Snapshot.swiftNow())
             .put("pending", true);
@@ -390,6 +502,8 @@ public final class Store {
       String rev = meta.getString("revision"), base = meta.optString("baseRevision", "");
       byte[] data;
       synchronized (this) {
+        JSONObject latest = assetIndex().optJSONObject(id);
+        if (latest == null || !rev.equals(latest.optString("revision"))) continue;
         data = read(new File(assetsDir(), id + ".json"));
       }
       DocumentReference ref = collection.document(id);

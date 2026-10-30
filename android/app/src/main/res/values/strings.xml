@@ -1,1 +1,1 @@
-<resources><string name="widget_description">Today and the next three days of your saved SATHI timetable</string></resources>
+<resources><string name="widget_description">Today and the next three days of your saved SATHI timetable</string><string name="shortcut_today">Today</string><string name="shortcut_notes">Notebooks</string><string name="shortcut_add">Add activity</string></resources>
