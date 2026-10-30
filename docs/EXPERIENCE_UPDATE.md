@@ -28,3 +28,10 @@ Android respects the shared semester-scoped manual selected IDs and optional pro
 ## Verification
 
 Run `apple/SyncChecks/run.sh` and Android `assembleDebug lintDebug testDebugUnitTest`. New checks cover old/new page JSON, image bytes/opacity/layer order, optional preferences, manual ID precedence across clients and opt-in penalties. Signed Apple builds must also succeed before installation. Do not delete accounts, notes or previous semesters to resolve a build or migration issue.
+
+
+### Timetable navigation and notebook shelf
+
+The phone tab bar now exposes Timetable directly, with Whole timetable and Calendar views. Mac and iPad retain separate sidebar entries. The whole timetable browses all uploaded sessions with subject/section rows and date columns, course filters, search and two-axis scrolling. Its range ends at the uploaded data.
+
+Notebooks opens the selection shelf rather than automatically reopening the previous book. Dashboard subject cards show numbered lecture tiles directly, with guest/activity tiles in chronological order and attendance/rescheduling menus.

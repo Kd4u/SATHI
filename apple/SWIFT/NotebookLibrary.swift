@@ -75,12 +75,8 @@ struct NotebookLibraryView: View {
         .task {
             do {
                 try store.configure(study: study)
-                if !opened && semesterID == nil { opened = true; try openLast() }
+                opened = true
             } catch { self.error = error.localizedDescription }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .sathiOpenNotebook)) { _ in
-            guard semesterID == nil, selected == nil else { return }
-            do { try openLast() } catch { self.error = error.localizedDescription }
         }
         .onReceive(NotificationCenter.default.publisher(for: .sathiNewNotebook)) { _ in if semesterID == nil { create = true } }
         #if os(iOS)

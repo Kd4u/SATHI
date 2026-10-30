@@ -630,7 +630,9 @@ struct ContentView: View {
             onEditCustom: { updated in
                 if let index = customEvents.firstIndex(where: { $0.id == updated.id }) { customEvents[index] = updated; saveExtras() }
             },
-            lectureOrdinals: lectureOrdinals
+            lectureOrdinals: lectureOrdinals,
+            timetableReport: report,
+            onRequestProgramme: { course in additionalProgramme = course; showImporter = true }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -39,6 +39,8 @@ struct SATHICommandCenter: View {
     let customEvents: [SATHICustomEvent]
     let onEditCustom: (SATHICustomEvent) -> Void
     let lectureOrdinals: [String: Int]
+    let timetableReport: TimetableReport?
+    let onRequestProgramme: (String) -> Void
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -52,6 +54,7 @@ struct SATHICommandCenter: View {
     @State private var editingEvent: SATHICustomEvent?
     @State private var editingImported: SATHICommandEvent?
     @State private var calendarWeek = true
+    @State private var tableCalendar = false
     @State private var campusDocument: String?
     @State private var selectedSubject: TimetableSubject?
 
@@ -100,7 +103,7 @@ struct SATHICommandCenter: View {
     #if os(iOS)
     private var phoneBody: some View {
         TabView(selection: $page) {
-            ForEach([SATHIPage.today, .calendar, .notes, .dashboard, .settings]) { item in
+            ForEach([SATHIPage.today, .whole, .notes, .dashboard, .settings]) { item in
                 NavigationStack {
                     ScrollView {
                         pageContent(item).padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -121,7 +124,6 @@ struct SATHICommandCenter: View {
             }
         }
         .background(AccentTabBar(color: accent).frame(width: 0, height: 0))
-        .onChange(of: page) { _, next in if next == .notes { NotificationCenter.default.post(name: .sathiOpenNotebook, object: nil) } }
         .sheet(isPresented: $showUpcoming) {
             NavigationStack { ScrollView { glimpsePage(all: true).padding() }.navigationTitle("Upcoming classes").toolbar { Button("Done") { showUpcoming = false } } }
         }
@@ -132,6 +134,12 @@ struct SATHICommandCenter: View {
         switch item {
         case .today: todayPage
         case .calendar: calendarPage
+        case .whole:
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Timetable view", selection: $tableCalendar) { Text("Whole timetable").tag(false); Text("Calendar").tag(true) }.pickerStyle(.segmented).frame(maxWidth: 360)
+                if tableCalendar { calendarPage }
+                else if let timetableReport { WholeTimetableGrid(report: timetableReport, onRequestProgramme: onRequestProgramme) }
+            }
         case .glimpses: glimpsePage(all: false)
         case .allGlimpses: glimpsePage(all: true)
         case .dashboard: dashboardPage
@@ -272,9 +280,31 @@ struct SATHICommandCenter: View {
             sectionHeading("Calendar", detail: "Your classes and activities")
             HStack { Button("Whole timetable", systemImage: "tablecells", action: onWholeSchedule); Spacer(); Button("Past semesters", systemImage: "clock.arrow.circlepath", action: onHistory) }
             Picker("Calendar view", selection: $calendarWeek) { Text("Week").tag(true); Text("Month").tag(false) }.pickerStyle(.segmented).frame(maxWidth: 260)
-            if calendarWeek { calendarWeekStrip } else { calendarCard.frame(maxWidth: isCompact ? .infinity : 560).frame(maxWidth: .infinity) }
-            sectionHeading("Selected day", detail: selectedDate.formatted(date: .complete, time: .omitted))
-            if sessionsOn(selectedDate).isEmpty && eventsOn(selectedDate).isEmpty { todayHero }
+            if isCompact || calendarWeek {
+                if calendarWeek { calendarWeekStrip } else { calendarCard }
+                calendarAgenda
+            } else {
+                HStack(alignment: .top, spacing: 24) {
+                    calendarCard.frame(width: 350)
+                    calendarAgenda.frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+    }
+
+    private var calendarAgenda: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(selectedDate.formatted(.dateTime.weekday(.wide))).font(.caption).foregroundStyle(.secondary)
+                    Text(selectedDate.formatted(.dateTime.day().month(.wide))).font(.title2.bold())
+                }
+                Spacer()
+                Button("Today") { selectedDate = Date(); month = Date() }.buttonStyle(.bordered)
+            }
+            if sessionsOn(selectedDate).isEmpty && eventsOn(selectedDate).isEmpty {
+                ContentUnavailableView("A clear day", systemImage: "calendar", description: Text("No classes or activities on this date."))
+            }
             ForEach(sessionsOn(selectedDate)) { classRow($0, planning: false) }
             ForEach(eventsOn(selectedDate), id: \.id) { eventRow($0) }
         }
@@ -353,7 +383,7 @@ struct SATHICommandCenter: View {
             .frame(height: CGFloat(24 + ((total / 7) * (49 + 8))))
             HStack(spacing: 16) {
                 Label("Classes", systemImage: "circle.fill").foregroundStyle(accent)
-                Label("Events", systemImage: "circle.fill").foregroundStyle(accent)
+                Label("Events", systemImage: "circle.fill").foregroundStyle(.orange)
             }.font(.caption)
         }.padding(16).sathiCard()
     }
@@ -571,6 +601,25 @@ struct SATHICommandCenter: View {
                 Text(recorded > 0 ? "\(Int(Double(attended) / Double(recorded) * 100))%" : "Unmarked")
                     .font(.caption.weight(.medium)).foregroundStyle(recorded > 0 ? accent : .secondary)
             }
+            Button("Open numbered lectures", systemImage: "square.grid.3x3") { selectedSubject = subject }.font(.caption)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 42))], spacing: 7) {
+                ForEach(lectureTileItems(subject), id: \.id) { item in
+                    Menu {
+                        Text(item.date + " · " + item.time)
+                        Button("Attended") { onAttendanceChange(item.id, "Attended") }
+                        Button("Missed") { onAttendanceChange(item.id, "Missed") }
+                        Button("OD") { onAttendanceChange(item.id, "OD") }
+                        Button("Clear status") { onAttendanceChange(item.id, nil) }
+                        Button("Reschedule") {
+                            if let row = relevant.first(where: { $0.id == item.id }) { editingSession = row }
+                            else { editingEvent = customEvents.first { "custom-" + $0.id.uuidString == item.id } }
+                        }
+                    } label: {
+                        Text(item.label).font(.caption.bold()).frame(width: 38, height: 38)
+                            .background((attendance[item.id] == "Attended" || attendance[item.id] == "OD") ? accent.opacity(0.35) : Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+                    }.buttonStyle(.plain).accessibilityLabel("Lecture \(item.label), \(item.date). Mark attendance")
+                }
+            }
             ProgressView(value: Double(recorded), total: Double(max(1, relevant.count))).tint(accent)
             HStack {
                 Text("\(recorded) / \(relevant.count) recorded")
@@ -603,6 +652,14 @@ struct SATHICommandCenter: View {
             Label(title, systemImage: symbol).font(.caption).foregroundStyle(proof[keyPath: keyPath] == true ? Color.accentColor : .secondary)
                 .padding(7).background(proof[keyPath: keyPath] == true ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.035), in: Capsule())
         }.buttonStyle(.plain)
+    }
+    private typealias LectureTileItem = (id: String, date: String, time: String, label: String, title: String)
+    private func lectureTileItems(_ subject: TimetableSubject) -> [LectureTileItem] {
+        let values = sessions.filter { $0.subject + "|" + $0.section == subject.key }
+        let guests = customEvents.filter { $0.subject == subject.name || $0.subject == (subject.key.components(separatedBy: "|").first ?? "") }
+        let classes: [LectureTileItem] = values.map { (id: $0.id, date: $0.date, time: $0.time, label: String(lectureNumber($0)), title: $0.subject) }
+        let activities: [LectureTileItem] = guests.map { (id: "custom-" + $0.id.uuidString, date: $0.date, time: $0.start + " – " + $0.end, label: $0.type == "Guest lecture" ? "G" : "A", title: $0.title) }
+        return (classes + activities).sorted { ($0.date, $0.time, $0.id) < ($1.date, $1.time, $1.id) }
     }
     private func subjectLectureSheet(_ subject: TimetableSubject) -> some View {
         let rows = sessions.filter { $0.subject + "|" + $0.section == subject.key }
@@ -706,12 +763,13 @@ struct SATHICommandCenter: View {
 }
 
 private enum SATHIPage: String, CaseIterable, Identifiable {
-    case today, calendar, glimpses, allGlimpses, dashboard, notes, settings
+    case today, calendar, whole, glimpses, allGlimpses, dashboard, notes, settings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .today: "Today"
         case .calendar: "Calendar"
+        case .whole: "Timetable"
         case .glimpses: "Glimpses"
         case .allGlimpses: "All Glimpses"
         case .dashboard: "Dashboard"
@@ -723,6 +781,7 @@ private enum SATHIPage: String, CaseIterable, Identifiable {
         switch self {
         case .today: "house.fill"
         case .calendar: "calendar"
+        case .whole: "tablecells"
         case .glimpses: "calendar.badge.clock"
         case .allGlimpses: "list.bullet.rectangle"
         case .dashboard: "chart.bar.xaxis"
