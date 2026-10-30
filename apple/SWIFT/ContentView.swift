@@ -216,6 +216,8 @@ struct ContentView: View {
             if let report { try? study.ensureSemesterID(seed: report.workbook + (report.sessions.map(\.date).min() ?? "")) }
             consumeNotificationAction()
             await refreshSurfaces()
+            await repairLegacyImport()
+            cloud.startLiveUpdates()
             // Restore this account once on launch without blocking its cached UI.
             await syncNow(automatic: true)
             var nextAutomaticSync = Date().addingTimeInterval(3600)
@@ -236,9 +238,18 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active && cloud.signedIn {
                 clockNow = Date()
-                Task { await refreshSurfaces(); await syncNow(automatic: true) }
+                cloud.startLiveUpdates()
+                Task { await refreshSurfaces(); await syncNow() }
             }
-            if phase == .background { BackgroundSync.schedule() }
+            if phase == .background {
+                BackgroundSync.schedule()
+                #if os(iOS)
+                cloud.stopLiveUpdates()
+                #endif
+            }
+        }
+        .onChange(of: cloud.remoteChange) { _, _ in
+            Task { await syncNow() }
         }
         .onChange(of: cloud.signedIn) { _, signedIn in
             useCachedCopy = false
@@ -1053,6 +1064,39 @@ struct ContentView: View {
         }
         selectedDate = Date()
     }
+    /// Re-read preserved originals using the corrected parser, never inventing missing lectures.
+    @MainActor private func repairLegacyImport() async {
+        guard let current = report, (current.importRevision ?? 0) < 2,
+              let uid = cloud.accountID, loadedAccountID == uid else { return }
+        let folder = storageDirectory
+        let sourceFolder = folder.appendingPathComponent("ImportSources")
+        let urls = ((try? FileManager.default.contentsOfDirectory(at: sourceFolder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension.lowercased() == "xlsx" }
+        guard !urls.isEmpty else { return }
+        let repaired = await Task.detached(priority: .utility) { () -> TimetableReport? in
+            for url in urls {
+                if let parsed = try? TimetableLogic().read(url: url), TimetableIdentity.canSupplement(current, with: parsed) {
+                    return TimetableReport(importRevision: parsed.importRevision, workbook: current.workbook, sessions: parsed.sessions, subjects: parsed.subjects, events: parsed.events, warnings: parsed.warnings)
+                }
+            }
+            return Optional<TimetableReport>.none
+        }.value
+        guard let repaired, cloud.accountID == uid, loadedAccountID == uid,
+              let live = report, TimetableIdentity.canSupplement(live, with: repaired) else { return }
+        do {
+            let destination = folder.appendingPathComponent("timetable.json")
+            let backup = folder.appendingPathComponent("ImportRepair-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+            if let data = try? Data(contentsOf: destination) { try data.write(to: backup.appendingPathComponent("timetable.json"), options: .atomic) }
+            try JSONEncoder().encode(repaired).write(to: destination, options: .atomic)
+            report = repaired
+            observedSnapshot = try syncSnapshot()
+            try cloud.journal.record("legacy_import_repaired", details: ["addedClasses": String(repaired.sessions.count - live.sessions.count)])
+            notice = "Recovered \(repaired.sessions.count - live.sessions.count) classes from your saved Excel. Existing attendance and subjects were preserved."
+            await refreshSurfaces()
+        } catch { notice = "Import repair could not finish: " + error.localizedDescription }
+    }
+
     private func importExcel(_ url: URL) {
         guard let importAccount = cloud.accountID, loadedAccountID == importAccount else { return }
         importing = true
@@ -1101,7 +1145,7 @@ struct ContentView: View {
                             let added = incoming.filter { identities.insert($0.date + "|" + $0.time + "|" + $0.subject + "|" + $0.section + "|" + course).inserted }
                             let all = existing.sessions + added
                             let moreEvents = parsed.events.filter { matching.isEmpty || TimetableIdentity.programme(source: $0.source) == course }.map { TimetableEvent(date: $0.date, time: $0.time, title: $0.title, source: course + " / " + $0.source) }
-                            let merged = TimetableReport(workbook: existing.workbook, sessions: all, subjects: TimetableIdentity.subjects(all), events: existing.events + moreEvents, warnings: existing.warnings + parsed.warnings)
+                            let merged = TimetableReport(importRevision: min(existing.importRevision ?? 0, parsed.importRevision ?? 0), workbook: existing.workbook, sessions: all, subjects: TimetableIdentity.subjects(all), events: existing.events + moreEvents, warnings: existing.warnings + parsed.warnings)
                             let backup = storageDirectory.appendingPathComponent("AdditionalSchedule-" + UUID().uuidString, isDirectory: true)
                             try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
                             try JSONEncoder().encode(existing).write(to: backup.appendingPathComponent("timetable.json"), options: .atomic)

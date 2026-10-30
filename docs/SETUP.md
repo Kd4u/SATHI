@@ -71,10 +71,12 @@ Use a separate test Google account, never a real class's exported records as a f
 
 1. Import a small synthetic timetable on device A and sync.
 2. Sign in with the same account on B and restore/sync without importing again.
-3. Record attendance on A; sync A, then B; confirm the same class status.
+3. Keep B open. Record OD on A and tap Sync on A only; confirm B receives the same class status through the server listener. Repeat offline and foreground B afterward to check catch-up.
 4. Edit different records offline on A and B; sync and verify both changes survive.
 5. Edit the same record on both; verify the conflict is reported and neither draft disappears. Choose the correct version explicitly (Apple: Google account panel; Android: tap Sync), verify private conflict backups exist and unrelated changes from both clients survive.
 6. Create/edit a typed note; sync and verify the content and account boundary.
 7. Sign in with a different account and confirm the original account's private data is not shown.
 
 Background jobs, widgets, notifications, Google account chooser and Pencil hardware also need real-device checks. Unit tests cannot establish those behaviours.
+
+Regression checks also cover an attendance/OD commit while an unrelated timetable is conflicted, retry-safe partial checkpoints, strict legacy-supplement repair and the start-only last-slot header. Real Firebase two-device delivery still requires the live-account test above.

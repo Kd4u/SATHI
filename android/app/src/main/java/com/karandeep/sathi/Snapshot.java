@@ -58,6 +58,75 @@ public final class Snapshot {
     return Objects.equals(a, b);
   }
 
+  public static boolean sameRecords(Map<String, String> a, Map<String, String> b) {
+    if (!a.keySet().equals(b.keySet())) return false;
+    for (String key : a.keySet()) if (!equivalent(a.get(key), b.get(key))) return false;
+    return true;
+  }
+
+  static String completeTimetable(String a, String b) {
+    if (a == null || b == null) return null;
+    try {
+      JSONObject left = new JSONObject(new String(Base64.getDecoder().decode(a), StandardCharsets.UTF_8));
+      JSONObject right = new JSONObject(new String(Base64.getDecoder().decode(b), StandardCharsets.UTF_8));
+      JSONArray x = left.getJSONArray("sessions"), y = right.getJSONArray("sessions");
+      if (x.length() == 0 || y.length() == 0 || x.length() == y.length()) return null;
+      JSONObject newer = x.length() > y.length() ? left : right, older = x.length() > y.length() ? right : left;
+      if (newer.optInt("importRevision",0) < 2 || older.optInt("importRevision",0) >= 2) return null;
+      JSONArray more = x.length() > y.length() ? x : y, less = x.length() > y.length() ? y : x;
+      Map<String, JSONObject> index = new HashMap<>();
+      for (int i = 0; i < more.length(); i++) {
+        JSONObject row = more.getJSONObject(i);
+        if (index.put(row.getString("id"), row) != null) return null;
+      }
+      for (int i = 0; i < less.length(); i++) {
+        JSONObject old = less.getJSONObject(i), next = index.get(old.getString("id"));
+        if (next == null) return null;
+        for (String field : List.of("id", "date", "time", "subject", "section", "source"))
+          if (!old.has(field) || !next.has(field) || !old.getString(field).equals(next.getString(field))) return null;
+      }
+      return x.length() > y.length() ? a : b;
+    } catch (Exception e) { return null; }
+  }
+
+  public static final class Exchange {
+    public final Map<String, String> cloud, local, checkpoint;
+    public final Set<String> conflicts;
+    Exchange(Map<String, String> cloud, Map<String, String> local,
+             Map<String, String> checkpoint, Set<String> conflicts) {
+      this.cloud = cloud; this.local = local; this.checkpoint = checkpoint; this.conflicts = conflicts;
+    }
+  }
+
+  public static Exchange exchange(Map<String, String> base, Map<String, String> local,
+                                  Map<String, String> remote, Boolean preferLocal) throws Exception {
+    String complete = completeTimetable(local.get("timetable"), remote.get("timetable"));
+    if (complete != null) {
+      local = new TreeMap<>(local); remote = new TreeMap<>(remote);
+      local.put("timetable", complete); remote.put("timetable", complete);
+    }
+    if (preferLocal != null) {
+      Map<String, String> merged = merge(base, local, remote, preferLocal);
+      return new Exchange(merged, merged, merged, Set.of());
+    }
+    Set<String> changed = new HashSet<>(base.keySet()); changed.addAll(local.keySet());
+    for (String key : new HashSet<>(changed)) if (equivalent(base.get(key), local.get(key))) changed.remove(key);
+    Set<String> blocked = new TreeSet<>();
+    for (String key : changed)
+      if (!equivalent(remote.get(key), base.get(key)) && !equivalent(remote.get(key), local.get(key))) blocked.add(key);
+    if (blocked.contains("timetable")) blocked.addAll(List.of("timetable", "selection", "study:semesters", "study:preferences"));
+    Map<String, String> cloud = new TreeMap<>(remote);
+    for (String key : changed) if (!blocked.contains(key)) copyRecord(cloud, local, key);
+    Map<String, String> applied = new TreeMap<>(cloud), checkpoint = new TreeMap<>(cloud);
+    for (String key : blocked) { copyRecord(applied, local, key); copyRecord(checkpoint, base, key); }
+    validate(cloud); validate(applied);
+    return new Exchange(cloud, applied, checkpoint, blocked);
+  }
+
+  private static void copyRecord(Map<String, String> into, Map<String, String> from, String key) {
+    if (from.containsKey(key)) into.put(key, from.get(key)); else into.remove(key);
+  }
+
   public static Map<String, String> merge(
       Map<String, String> base, Map<String, String> local, Map<String, String> remote)
       throws Exception {

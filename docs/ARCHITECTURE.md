@@ -6,7 +6,7 @@ SATHI has two native clients and one compatible Firebase data contract. SwiftUI 
 
 Clients scope saved files to the authenticated Firebase UID rather than sharing a global cache between accounts. Local writes use atomic replacement. A cached timetable is shown immediately; network requests and workbook parsing should not block drawing, typing or initial presentation.
 
-Clients check the account snapshot once on launch without blocking the cached UI. Completed imports and onboarding selections upload immediately; ordinary edits use explicit Sync or roughly hourly opportunities, subject to platform scheduling and battery limits. No real-time Firestore listener is used for the main timetable.
+Clients show cached data immediately and check cloud on launch/foreground. An account-scoped Firestore listener requests a merge when a committed server snapshot changes, so a Sync tap on one device reaches other open clients. Pending/local/cache-only notifications and equivalent JSON are ignored to avoid write loops. Mobile listeners detach in background; foreground restore and hourly OS background opportunities handle suspended devices. Completed imports/onboarding upload immediately; ordinary local edits are committed by Sync or hourly opportunities.
 
 ## Timetable snapshot
 
@@ -14,7 +14,7 @@ Clients check the account snapshot once on launch without blocking the cached UI
 
 Keys include `timetable`, `selection`, `attendance:{id}`, `event:{uuid}`, `study:preferences`, `study:semesters`, `study:proof:{id}` and `study:override:{id}`. Preserve unknown keys byte-for-byte. Session IDs derived from worksheet/cell/index allow attendance to refer to the same imported class on both platforms. Swift dates use seconds from 2001-01-01 unless the model specifies a date string.
 
-Sync uses a three-way comparison between a saved baseline, the local snapshot and the remote snapshot, inside a Firestore transaction. Independent edits merge; divergent changes to the same key produce a conflict. JSON record comparisons ignore object-key order and formatting differences across clients. An explicit conflict choice selects this device or cloud for conflicting records. A timetable conflict also selects its associated subject selection, semester index and study preferences as one bundle, preventing an accepted timetable from showing zero classes under another import’s selection. Both snapshots and the baseline are saved in private SyncConflictBackups before a resolving transaction writes; independent edits are retained. In-flight edits still use the normal conflict-protected merge. Android also merges edits made while the request was running into the local result, so a network response cannot discard fresh local typing/changes.
+Sync uses a three-way comparison between a saved baseline, the local snapshot and the remote snapshot, inside a Firestore transaction. Independent edits merge. Divergent changes keep both drafts, but block only the conflicting records: unrelated attendance/OD/events can still commit. The local checkpoint advances only successful records, retaining the original baseline for unresolved conflicts and retries. JSON record comparisons ignore object-key order and formatting differences across clients. An explicit conflict choice selects this device or cloud for conflicting records. A timetable conflict also selects its associated subject selection, semester index and study preferences as one bundle, preventing an accepted timetable from showing zero classes under another import’s selection. Both snapshots and the baseline are saved in private SyncConflictBackups before a resolving transaction writes; independent edits are retained. In-flight edits still use the normal conflict-protected merge. Android also merges edits made while the request was running into the local result, so a network response cannot discard fresh local typing/changes.
 
 The shared snapshot stays below the Firestore document-size limit; clients reject oversized payloads before committing. Do not store drawing blobs inside this single document.
 
@@ -39,3 +39,12 @@ Unmarked means unknown. Official duty counts as present. Fingerprint and sheet c
 Apple decodes XLSX cells with CoreXLSX and applies a small trained logistic cell-role classifier from `SWIFT/TimetableCellRole.json`. It runs locally in native Swift and distinguishes class candidates from events/background. Source positions, time parsing, name normalization, programme/section handling and completeness checks remain explicit. See [training/evaluation](../training/timetable/README.md) and [import repair](TIMETABLE_IMPORT.md). Android currently uses its existing deterministic parser; no Android model integration is claimed here.
 
 A matching-timetable supplement requires every saved class identity and source/date/time/subject/section to remain present, then permits added cells while retaining selections, attendance and semester state. Original workbooks are retained privately on the importing device for future audit. Those source files are not automatically uploaded as part of the shared JSON snapshot.
+
+
+## Import completeness and legacy repair
+
+Parser revision 2 includes trailing start-only time headers when a complete preceding slot supplies a valid duration. The inferred end is shown for review. No class is generated to meet a target count. Subject/section counts are recomputed from actual source sessions.
+
+Apple can re-read preserved ImportSources on launch for a legacy import, only accepting a strict supplement with every existing class ID/date/time/source/subject/section unchanged. The previous timetable is backed up before replacement. Attendance, custom events, manual selections and notebook files are retained.
+
+During sync, a revision-2 strict supplement can replace a matching legacy partial import automatically on either side. Two revision-2 schedules, changed class identities and different semesters still require conflict resolution; a genuine cancellation must not be mistaken for an incomplete legacy parse. Raw workbooks remain private local sources.

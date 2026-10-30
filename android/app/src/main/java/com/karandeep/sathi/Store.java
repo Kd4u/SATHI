@@ -27,6 +27,40 @@ public final class Store {
   private Map<String, String> records = new TreeMap<>(), baseline = new TreeMap<>();
   private boolean busy = false;
   private long lastSync = 0;
+  private boolean hasConflicts = false;
+  private ListenerRegistration liveListener;
+  private String listenerUID;
+  private Map<String, String> lastServerSnapshot;
+  public synchronized boolean hasConflicts() { return hasConflicts; }
+
+  public synchronized void stopLiveUpdates() {
+    if (liveListener != null) liveListener.remove();
+    liveListener = null; listenerUID = null; lastServerSnapshot = null;
+  }
+
+  public synchronized void startLiveUpdates(Completion callback) {
+    if (owner.isEmpty() || owner.equals(listenerUID)) return;
+    stopLiveUpdates();
+    final String uid = owner; listenerUID = uid;
+    liveListener = FirebaseFirestore.getInstance().collection("users").document(uid)
+      .collection("sathi").document("snapshot").addSnapshotListener((doc, error) -> {
+        boolean changed = false;
+        synchronized (Store.this) {
+          if (!owner.equals(uid) || !uid.equals(listenerUID)) return;
+          if (error != null) { callback.done("Live sync unavailable: " + error.getMessage(), false); return; }
+          if (doc == null || doc.getMetadata().hasPendingWrites() || doc.getMetadata().isFromCache()) return;
+          try {
+            Blob payload = doc.getBlob("payload");
+            if (payload == null) return;
+            Map<String, String> incoming = Snapshot.decode(payload.toBytes());
+            if (lastServerSnapshot != null && Snapshot.sameRecords(lastServerSnapshot, incoming)) return;
+            lastServerSnapshot = incoming;
+            changed = !Snapshot.sameRecords(baseline, incoming);
+          } catch (Exception e) { callback.done("Live update could not be read; saved data retained", false); return; }
+        }
+        if (changed) callback.done("Cloud changes available", true);
+      });
+  }
 
   public interface Completion {
     void done(String message, boolean ok);
@@ -41,6 +75,8 @@ public final class Store {
     String uid = user == null ? "" : user.getUid();
     if (uid.equals(owner) && folder != null) return;
     if (busy) throw new Exception("A sync is finishing. Please try again in a moment.");
+    stopLiveUpdates();
+    hasConflicts = false;
     owner = uid;
     records = new TreeMap<>();
     baseline = new TreeMap<>();
@@ -194,7 +230,7 @@ public final class Store {
             FirebaseFirestore db = FirebaseFirestore.getInstance();
             DocumentReference ref =
                 db.collection("users").document(uid).collection("sathi").document("snapshot");
-            byte[] mergedBytes =
+            Snapshot.Exchange exchange =
                 Tasks.await(
                     db.runTransaction(
                         tx -> {
@@ -212,11 +248,11 @@ public final class Store {
                               throw new Exception("Cloud snapshot is missing. Local data is safe.");
                             if (preferLocal != null)
                               atomic(new File(conflictBackup, "remote-" + UUID.randomUUID() + ".json"), Snapshot.encode(remote));
-                            Map<String, String> merged = Snapshot.merge(base, local, remote, preferLocal);
-                            byte[] bytes = Snapshot.encode(merged);
+                            Snapshot.Exchange exchangeResult = Snapshot.exchange(base, local, remote, preferLocal);
+                            byte[] bytes = Snapshot.encode(exchangeResult.cloud);
                             if (bytes.length >= 900000)
                               throw new Exception("Cloud snapshot exceeds size limit");
-                            if (!doc.exists() || !merged.equals(remote))
+                            if (!doc.exists() || !Snapshot.sameRecords(exchangeResult.cloud, remote))
                               tx.set(
                                   ref,
                                   new HashMap<>(
@@ -227,7 +263,7 @@ public final class Store {
                                           Blob.fromBytes(bytes),
                                           "updatedAt",
                                           FieldValue.serverTimestamp())));
-                            return bytes;
+                            return exchangeResult;
                           } catch (Exception e) {
                             throw new FirebaseFirestoreException(
                                 e.getMessage(), FirebaseFirestoreException.Code.ABORTED, e);
@@ -235,19 +271,21 @@ public final class Store {
                         }),
                     45,
                     TimeUnit.SECONDS);
-            Map<String, String> merged = Snapshot.decode(mergedBytes);
+            byte[] mergedBytes = Snapshot.encode(exchange.checkpoint);
             synchronized (this) {
               if (!owner.equals(uid)) throw new Exception("Account changed; result ignored.");
               // Edits made during the network operation remain queued locally.
-              Map<String, String> next = Snapshot.merge(local, records, merged);
+              Map<String, String> next = Snapshot.merge(local, records, exchange.local);
               atomic(new File(directory, "snapshot-before-sync.json"), Snapshot.encode(records));
               atomic(new File(directory, "snapshot.json"), Snapshot.encode(next));
               records = next;
               atomic(new File(directory, "baseline.json"), mergedBytes);
-              baseline = merged;
+              baseline = exchange.checkpoint;
+              hasConflicts = !exchange.conflicts.isEmpty();
               lastSync = System.currentTimeMillis();
               context.getSharedPreferences("sync", 0).edit().putLong(uid, lastSync).apply();
             }
+            if (!exchange.conflicts.isEmpty()) message = "Other changes synced. Both devices changed " + String.join(", ", exchange.conflicts) + "; choose a version for these records.";
             uploadJournal(db, uid, directory);
             syncAssets(db, uid, directory);
             success = true;

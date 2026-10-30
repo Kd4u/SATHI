@@ -3,7 +3,7 @@ import CoreXLSX
 
 // MARK: - Data models (used by ContentView.swift)
 
-private struct TimetableCell {
+nonisolated private struct TimetableCell {
     let address: String
     let column: Int
     let row: Int
@@ -12,7 +12,7 @@ private struct TimetableCell {
 
 // MARK: - Excel timetable reader
 
-struct TimetableLogic {
+nonisolated struct TimetableLogic {
     func read(url: URL, modelURL: URL? = nil) throws -> TimetableReport {
         guard let file = XLSXFile(filepath: url.path) else {
             throw NSError(
@@ -220,6 +220,7 @@ struct TimetableLogic {
             warnings.append("No classes with matched professors were found. Check the workbook layout.")
         }
         return TimetableReport(
+            importRevision: 2,
             workbook: url.lastPathComponent,
             sessions: sessions,
             subjects: subjects,

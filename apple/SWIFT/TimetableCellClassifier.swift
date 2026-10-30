@@ -2,7 +2,7 @@ import Foundation
 
 /// Trained binary cell-role model. Extraction, identity and source-cell accounting
 /// remain explicit so a prediction can never fabricate a missing lecture.
-struct TimetableCellClassifier {
+nonisolated struct TimetableCellClassifier {
     private struct Parameters: Decodable {
         let version: Int
         let features: [String]

@@ -88,7 +88,7 @@ struct TimetableReviewView: View {
                 ToolbarItem(placement: .cancellationAction) { Button(readOnly ? "Done" : "Cancel") { dismiss() } }
                 if !readOnly { ToolbarItem(placement: .confirmationAction) { Button("Save my \(chosen.count) classes") {
                     let addedSources = promotedEvents
-                    let updated = TimetableReport(workbook: report.workbook, sessions: rows, subjects: TimetableIdentity.subjects(rows), events: report.events.filter { !addedSources.contains($0.source + "|" + $0.date + "|" + $0.time + "|" + $0.title) }, warnings: report.warnings)
+                    let updated = TimetableReport(importRevision: report.importRevision, workbook: report.workbook, sessions: rows, subjects: TimetableIdentity.subjects(rows), events: report.events.filter { !addedSources.contains($0.source + "|" + $0.date + "|" + $0.time + "|" + $0.title) }, warnings: report.warnings)
                     onSave(updated, chosen)
                 }.disabled(chosen.isEmpty) } }
             }

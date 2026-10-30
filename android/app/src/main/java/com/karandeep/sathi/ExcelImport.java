@@ -123,12 +123,31 @@ public final class ExcelImport {
         if (TIME.matcher(cell.getValue().text).find())
           slots.put(cell.getKey(), cell.getValue().text);
       }
+      for (Map.Entry<Integer, Cell> cell : rows.get(header).entrySet()) {
+        if (!cell.getValue().text.matches("\\d{1,2}:\\d{2}") || slots.containsKey(cell.getKey())) continue;
+        Map.Entry<Integer, String> previous = slots.lowerEntry(cell.getKey());
+        if (previous == null || previous.getKey() + 1 != cell.getKey()) continue;
+        Matcher clocks = TIME.matcher(previous.getValue());
+        if (!clocks.find()) continue;
+        String[] parts = clocks.group().split("[-–—]");
+        try {
+          LocalTime from = LocalTime.parse(parts[0].trim().replace('.', ':'), DateTimeFormatter.ofPattern("H:mm"));
+          LocalTime to = LocalTime.parse(parts[1].trim().replace('.', ':'), DateTimeFormatter.ofPattern("H:mm"));
+          LocalTime start = LocalTime.parse(cell.getValue().text, DateTimeFormatter.ofPattern("H:mm"));
+          long duration = java.time.Duration.between(from, to).toMinutes();
+          if (duration <= 0 || start.toSecondOfDay() / 60 + duration >= 1440) continue;
+          String slot = cell.getValue().text + "-" + start.plusMinutes(duration).format(DateTimeFormatter.ofPattern("HH:mm"));
+          slots.put(cell.getKey(), slot);
+          warnings.put(sheetName + "!" + cell.getValue().address + ": inferred end time " + slot + "; verify against the official schedule");
+        } catch (Exception ignored) { /* Keep an invalid header visible to import review. */ }
+      }
       if (slots.isEmpty()) {
         warnings.put(sheetName + ": no time-slot headers detected");
         continue;
       }
-      String inherited = label(sheetName);
-      if (inherited.isEmpty()) {
+      boolean inlineSections = rows.values().stream().anyMatch(row -> row.values().stream().anyMatch(c -> SECTION_LABEL.matcher(c.text).find()));
+      String inherited = inlineSections ? "" : label(sheetName);
+      if (inherited.isEmpty() && !inlineSections) {
         Set<String> sections = new HashSet<>();
         for (int r : rows.keySet())
           if (r < header)
@@ -176,12 +195,13 @@ public final class ExcelImport {
                         + "' — treated as event; verify if this is a class");
               continue;
             }
-            Matcher m = SECTION.matcher(entry);
+            Matcher m = SECTION_LABEL.matcher(entry);
             String section = inherited, subject = entry;
             if (m.find()) {
               section = m.group(1).toUpperCase(Locale.ROOT);
-              subject = m.replaceFirst("").trim();
+              subject = m.replaceFirst("").replaceAll("\\(\\s*\\)", "").trim();
             }
+            subject = subject.replaceAll("\\s+[-–—]\\s*\\d{1,3}\\s*$", "").replaceAll("\\s+", " ").trim();
             sessions.put(
                 new JSONObject()
                     .put("id", "Sheet" + (sheet + 1) + "-" + cell.address + "-" + index)
@@ -227,6 +247,7 @@ public final class ExcelImport {
       throw new Exception(
           "No dated timetable rows found. Expected Date, Day and time-slot headers.");
     return new JSONObject()
+        .put("importRevision", 2)
         .put("workbook", name)
         .put("sessions", sessions)
         .put("subjects", subjects)

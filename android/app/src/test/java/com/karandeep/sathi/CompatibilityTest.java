@@ -16,6 +16,40 @@ public class CompatibilityTest {
   }
 
   @Test
+  public void verifiedLegacySupplementCannotRegressAndDoesNotUndoCancellations() throws Exception {
+    JSONObject one = session("c1", "2026-11-01", 9).put("source", "Sheet1!C2");
+    JSONObject two = session("j1", "2026-11-01", 21).put("source", "Sheet1!J2");
+    JSONObject old = new JSONObject().put("sessions", new JSONArray().put(one)).put("subjects", new JSONArray()).put("events", new JSONArray());
+    JSONObject complete = new JSONObject(old.toString()).put("sessions", new JSONArray().put(one).put(two)).put("importRevision", 2);
+    String legacy = Snapshot.value(old), full = Snapshot.value(complete);
+    Snapshot.Exchange plan = Snapshot.exchange(Map.of(), Map.of("timetable", full), Map.of("timetable", legacy), null);
+    assertEquals(full, plan.cloud.get("timetable"));
+    assertEquals(full, plan.local.get("timetable"));
+    old.put("importRevision", 2);
+    assertNull(Snapshot.completeTimetable(Snapshot.value(old), full));
+  }
+
+  @Test
+  public void odSyncsEvenWhenTimetableConflicts() throws Exception {
+    String old = reportRecord("old"), mine = reportRecord("mine"), cloud = reportRecord("cloud");
+    String od = Base64.getEncoder().encodeToString("\"OD\"".getBytes(StandardCharsets.UTF_8));
+    Map<String, String> base = Map.of("timetable", old);
+    Map<String, String> local = Map.of("timetable", mine, "attendance:class1", od);
+    Snapshot.Exchange plan = Snapshot.exchange(base, local, Map.of("timetable", cloud), null);
+    assertEquals(od, plan.cloud.get("attendance:class1"));
+    assertEquals(mine, plan.local.get("timetable"));
+    assertEquals(old, plan.checkpoint.get("timetable"));
+    Snapshot.Exchange retry = Snapshot.exchange(plan.checkpoint, plan.local, plan.cloud, null);
+    assertEquals(plan.cloud, retry.cloud);
+    assertEquals(plan.local, retry.local);
+  }
+
+  String reportRecord(String name) throws Exception {
+    return Snapshot.value(new JSONObject().put("workbook",name).put("sessions",new JSONArray())
+      .put("subjects",new JSONArray()).put("events",new JSONArray()));
+  }
+
+  @Test
   public void explicitResolutionPreservesIndependentEdits() throws Exception {
     Map<String, String> base = Map.of("a", value("old"), "b", value("old"));
     Map<String, String> local = Map.of("a", value("mine"), "b", value("old"));
@@ -162,13 +196,16 @@ public class CompatibilityTest {
         "<worksheet><sheetData><row r='1'>"
             + cell("A1", "Date")
             + cell("B1", "Day")
-            + cell("C1", "09:00-10:00")
+            + cell("C1", "09:00-10:30")
+            + cell("D1", "21:15")
             + "</row><row r='2'>"
             + cell("A2", "2026-10-27")
             + cell("B2", "Tuesday")
-            + cell("C2", "Course (Sec A)")
+            + cell("C2", "Course (Sec A) - 1")
+            + cell("D2", "Course (Sec A) - 2")
             + "</row><row r='3'>"
             + cell("C3", "Prof. Example")
+            + cell("D3", "Prof. Example")
             + "</row><row r='4'>"
             + cell("A4", "2026-10-28")
             + cell("C4", "END TERM EXAMINATIONS")
@@ -187,6 +224,9 @@ public class CompatibilityTest {
     assertEquals("Course", s.getString("subject"));
     assertEquals("A", s.getString("section"));
     assertEquals(1, report.getJSONArray("events").length());
+    assertEquals(2, report.getJSONArray("sessions").length());
+    assertEquals("21:15-22:45", report.getJSONArray("sessions").getJSONObject(1).getString("time"));
+    assertEquals("Course", report.getJSONArray("sessions").getJSONObject(1).getString("subject"));
   }
 
   String cell(String address, String value) {

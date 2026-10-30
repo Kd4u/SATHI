@@ -88,13 +88,21 @@ public class MainActivity extends Activity {
     out.putString("date", selectedDate.toString());
   }
 
+  private void startLiveUpdates() {
+    if (store == null) return;
+    store.startLiveUpdates((message, changed) -> runOnUiThread(() -> {
+      if (changed) sync(false);
+      else { status = message; if (editor == null) render(); }
+    }));
+  }
+
   public void onResume() {
     super.onResume();
-    if (store != null && FirebaseAuth.getInstance().getCurrentUser() != null
-        && System.currentTimeMillis() - store.lastSync() >= 3600000) sync(false);
+    if (store != null && FirebaseAuth.getInstance().getCurrentUser() != null) { startLiveUpdates(); sync(false); }
   }
 
   public void onPause() {
+    if (store != null) store.stopLiveUpdates();
     flushDraft();
     super.onPause();
   }
@@ -379,6 +387,7 @@ public class MainActivity extends Activity {
                                   store.journal("google_sign_in", new JSONObject());
                                   status = "Signed in. Loading your saved timetable…";
                                   render();
+                                  startLiveUpdates();
                                   sync(false);
                                 } catch (Exception e) {
                                   error(e);
@@ -431,7 +440,7 @@ public class MainActivity extends Activity {
                   if (editor == null) render();
                   if (explicit) {
                     Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-                    if (!ok && message.contains("Both devices changed")) {
+                    if (store.hasConflicts() || (!ok && message.contains("Both devices changed"))) {
                       new AlertDialog.Builder(this)
                         .setTitle("Choose a version for conflicting records")
                         .setMessage("Both versions will be backed up on this device first. Timetable conflicts also use that version’s semester, subjects and study preferences. Other independent edits are kept. If your Mac has the correct timetable, sync it there first, then choose cloud here.")
@@ -863,7 +872,7 @@ public class MainActivity extends Activity {
     gap(account, 8);
     account.addView(
         text(
-            "Changes save on this phone immediately. Cloud sync runs hourly when Android allows, or"
+            "Changes save on this phone immediately. Sync sends changes to other open devices automatically. Background sync runs hourly, or"
                 + " when you tap Sync. Background timing can be delayed by battery optimisation.",
             13,
             secondary,

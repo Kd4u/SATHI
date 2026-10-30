@@ -23,6 +23,10 @@ final class CloudSyncStore: ObservableObject {
     @Published private(set) var lastSync: Date?
     @Published private(set) var accountID: String?
     @Published private(set) var hasUnclaimedLegacy = false
+    @Published private(set) var remoteChange = 0
+    private var liveListener: ListenerRegistration?
+    private var listenerUID: String?
+    private var lastServerSnapshot: SyncSnapshot?
     private var baseline = SyncSnapshot()
     private let rootDirectory: URL
     var dataDirectory: URL {
@@ -51,6 +55,7 @@ final class CloudSyncStore: ObservableObject {
     }
 
     private func activate(_ user: User) throws {
+        stopLiveUpdates()
         let storage = AccountStorage(root: rootDirectory)
         let folder = try storage.prepare(for: user.uid)
         // Change the complete session together; no prior account's baseline or queue survives.
@@ -122,6 +127,7 @@ final class CloudSyncStore: ObservableObject {
         guard !busy else { return }
         do {
             try journal.record("sign_out")
+            stopLiveUpdates()
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
             signedIn = false
@@ -135,6 +141,40 @@ final class CloudSyncStore: ObservableObject {
             journal = ActivityJournal(directory: rootDirectory.appendingPathComponent("SignedOut", isDirectory: true))
             status = "Signed out. Your saved copy remains on this device."
         } catch { status = error.localizedDescription }
+    }
+
+    func stopLiveUpdates() {
+        liveListener?.remove()
+        liveListener = nil; listenerUID = nil; lastServerSnapshot = nil
+    }
+
+    func startLiveUpdates() {
+        guard configured, signedIn, let uid = accountID else { return }
+        guard listenerUID != uid else { return }
+        stopLiveUpdates(); listenerUID = uid
+        liveListener = Firestore.firestore().collection("users").document(uid)
+            .collection("sathi").document("snapshot").addSnapshotListener { [weak self] doc, error in
+                Task { @MainActor [weak self] in
+                    guard let self, self.accountID == uid, self.listenerUID == uid else { return }
+                    if let error {
+                        if !self.busy { self.status = "Live sync unavailable: " + error.localizedDescription }
+                        return
+                    }
+                    guard let doc, !doc.metadata.hasPendingWrites, !doc.metadata.isFromCache,
+                          let data = doc.data()?["payload"] as? Data,
+                          let snapshot = try? JSONDecoder().decode(SyncSnapshot.self, from: data) else { return }
+                    if let previous = self.lastServerSnapshot, Self.sameRecords(previous, snapshot) { return }
+                    self.lastServerSnapshot = snapshot
+                    // Own commits and equivalent JSON must not cause listener/write loops.
+                    if !Self.sameRecords(self.baseline, snapshot) { self.remoteChange += 1 }
+                }
+            }
+    }
+
+    nonisolated private static func sameRecords(_ a: SyncSnapshot, _ b: SyncSnapshot) -> Bool {
+        Set(a.records.keys) == Set(b.records.keys) && a.records.keys.allSatisfy {
+            SyncSnapshot.equivalent(a.records[$0], b.records[$0])
+        }
     }
 
     private func syncActivity(uid: String) async throws {
@@ -205,13 +245,13 @@ final class CloudSyncStore: ObservableObject {
                             // Retain every transaction revision before an explicit conflict choice.
                             try JSONEncoder().encode(remote).write(to: backupFolder.appendingPathComponent("remote-" + UUID().uuidString + ".json"), options: .atomic)
                         }
-                        let merged = try SyncSnapshot.merge(base: base, local: local, remote: remote, resolving: resolving)
-                        let payload = try JSONEncoder().encode(merged)
+                        let exchange = try SyncExchange.prepare(base: base, local: local, remote: remote, resolving: resolving)
+                        let payload = try JSONEncoder().encode(exchange.cloud)
                         guard payload.count < 900_000 else { throw SyncFailure.oversized }
-                        if merged != remote || !doc.exists {
+                        if !Self.sameRecords(exchange.cloud, remote) || !doc.exists {
                             transaction.setData(["schema": 1, "payload": payload, "updatedAt": FieldValue.serverTimestamp()], forDocument: ref)
                         }
-                        return payload
+                        return try JSONEncoder().encode(exchange)
                     } catch {
                         errorPointer?.pointee = error as NSError
                         return nil
@@ -222,22 +262,22 @@ final class CloudSyncStore: ObservableObject {
                     else { continuation.resume(throwing: SyncFailure.invalidData) }
                 })
             }
-            let merged = try JSONDecoder().decode(SyncSnapshot.self, from: result)
+            let exchange = try JSONDecoder().decode(SyncExchange.self, from: result)
             guard !Task.isCancelled, accountID == uid, Auth.auth().currentUser?.uid == uid else { throw SyncFailure.account }
-            try apply(merged)
-            let checkpoint = Baseline(owner: uid, snapshot: merged, lastSync: Date())
+            try apply(exchange.local)
+            let checkpoint = Baseline(owner: uid, snapshot: exchange.checkpoint, lastSync: Date())
             try JSONEncoder().encode(checkpoint).write(to: directory.appendingPathComponent("sync-baseline.json"), options: .atomic)
-            baseline = merged
+            baseline = exchange.checkpoint
             lastSync = checkpoint.lastSync
             hasCheckedCloud = true
-            hasConflict = false
+            hasConflict = !exchange.conflicts.isEmpty
             do {
                 try await syncActivity(uid: uid)
             } catch {
                 status = "Timetable synced. Activity history will retry: \(error.localizedDescription)"
                 return
             }
-            status = "Up to date"
+            status = hasConflict ? "Other changes synced. Conflicting records still need a version choice: " + exchange.conflicts.joined(separator: ", ") : "Up to date"
         } catch {
             if error.localizedDescription.contains("Both devices changed") { hasConflict = true }
             status = "Sync not completed: \(error.localizedDescription)"
@@ -293,7 +333,7 @@ struct CloudSyncPanel: View {
                 Button("Use cloud version") { proposedResolution = .remote; confirmingResolution = true }.disabled(store.busy)
             }
             if let date = store.lastSync { Text("Last synced: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
-            Text("Saved locally immediately. Checks cloud when opened, then hourly when the system permits, or when you tap Save & Refresh. Completed imports upload automatically.").font(.caption).foregroundStyle(.secondary)
+            Text("Saved locally immediately. Sync sends your changes to cloud. Other open devices receive committed changes automatically. Sleeping devices refresh when reopened; hourly background refresh remains available.").font(.caption).foregroundStyle(.secondary)
             Button("Sign out") { store.signOut() }.disabled(store.busy)
         }.padding()
         .confirmationDialog("Resolve conflicting changes?", isPresented: $confirmingResolution, titleVisibility: .visible) {

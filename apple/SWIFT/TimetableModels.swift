@@ -11,14 +11,14 @@ nonisolated struct TimetableSession: Codable, Identifiable, Sendable {
     let source: String
 }
 
-struct TimetableSubject: Codable {
+nonisolated struct TimetableSubject: Codable, Sendable {
     let key: String
     let name: String
     let count: Int
     let credits: Double
 }
 
-struct TimetableEvent: Codable {
+nonisolated struct TimetableEvent: Codable, Sendable {
     let date: String
     let time: String
     let title: String
@@ -26,7 +26,8 @@ struct TimetableEvent: Codable {
     var id: String? = nil
 }
 
-struct TimetableReport: Codable {
+nonisolated struct TimetableReport: Codable, Sendable {
+    var importRevision: Int? = nil
     let workbook: String
     let sessions: [TimetableSession]
     let subjects: [TimetableSubject]
@@ -97,7 +98,9 @@ nonisolated enum TimetableIdentity {
             return TimetableSession(id: row.id, date: row.date, day: row.day, time: row.time, subject: name, section: section, teacher: row.teacher, source: row.source)
         }
         guard changed else { return (report, keys, false) }
-        return (TimetableReport(workbook: report.workbook, sessions: rows, subjects: subjects(rows), events: report.events, warnings: report.warnings), keys, true)
+        var result = TimetableReport(workbook: report.workbook, sessions: rows, subjects: subjects(rows), events: report.events, warnings: report.warnings)
+        result.importRevision = report.importRevision
+        return (result, keys, true)
     }
     /// A same-timetable supplement may add missing cells, but cannot remove or
     /// reinterpret existing classes. It must retain every attendance identifier.
