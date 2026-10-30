@@ -16,6 +16,25 @@ public class CompatibilityTest {
   }
 
   @Test
+  public void explicitResolutionPreservesIndependentEdits() throws Exception {
+    Map<String, String> base = Map.of("a", value("old"), "b", value("old"));
+    Map<String, String> local = Map.of("a", value("mine"), "b", value("old"));
+    Map<String, String> remote = Map.of("a", value("cloud"), "b", value("independent"));
+    assertEquals(value("mine"), Snapshot.merge(base, local, remote, true).get("a"));
+    assertEquals(value("independent"), Snapshot.merge(base, local, remote, true).get("b"));
+    assertEquals(remote, Snapshot.merge(base, local, remote, false));
+  }
+
+  @Test
+  public void jsonKeyOrderDoesNotInventAConflict() throws Exception {
+    String a = Base64.getEncoder().encodeToString("{\"a\":1,\"b\":2}".getBytes(StandardCharsets.UTF_8));
+    String b = Base64.getEncoder().encodeToString("{\"b\":2,\"a\":1}".getBytes(StandardCharsets.UTF_8));
+    String remote = value("real edit");
+    assertEquals(remote, Snapshot.merge(Map.of("x", a), Map.of("x", b), Map.of("x", remote)).get("x"));
+    assertEquals(a, Snapshot.merge(Map.of(), Map.of("x", a), Map.of("x", b)).get("x"));
+  }
+
+  @Test
   public void swiftWireRoundTripPreservesUnknownRecords() throws Exception {
     Map<String, String> records =
         new TreeMap<>(

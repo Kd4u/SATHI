@@ -19,6 +19,7 @@ final class CloudSyncStore: ObservableObject {
     @Published private(set) var signedIn = false
     @Published private(set) var busy = false
     @Published private(set) var status = "Cloud sync not connected"
+    @Published private(set) var hasConflict = false
     @Published private(set) var lastSync: Date?
     @Published private(set) var accountID: String?
     @Published private(set) var hasUnclaimedLegacy = false
@@ -54,6 +55,7 @@ final class CloudSyncStore: ObservableObject {
         let folder = try storage.prepare(for: user.uid)
         // Change the complete session together; no prior account's baseline or queue survives.
         baseline = .init()
+        hasConflict = false
         lastSync = nil
         hasCheckedCloud = false
         journal = ActivityJournal(directory: folder)
@@ -169,7 +171,7 @@ final class CloudSyncStore: ObservableObject {
     }
 
     // apply must validate and durably save local data before advancing the baseline.
-    func sync(local: SyncSnapshot, apply: (SyncSnapshot) throws -> Void) async {
+    func sync(local: SyncSnapshot, resolving: SyncConflictResolution? = nil, apply: (SyncSnapshot) throws -> Void) async {
         guard configured else { status = SyncFailure.configuration.localizedDescription; return }
         guard signedIn, let uid = accountID, Auth.auth().currentUser?.uid == uid else { status = SyncFailure.account.localizedDescription; return }
         guard !busy else { return }
@@ -180,6 +182,12 @@ final class CloudSyncStore: ObservableObject {
             let base = baseline
             // An unexpectedly empty local store must never erase an existing cloud snapshot.
             guard base.records.isEmpty || !local.records.isEmpty else { throw SyncFailure.invalidData }
+            let backupFolder = directory.appendingPathComponent("SyncConflictBackups/" + UUID().uuidString, isDirectory: true)
+            if resolving != nil {
+                try FileManager.default.createDirectory(at: backupFolder, withIntermediateDirectories: true)
+                try JSONEncoder().encode(local).write(to: backupFolder.appendingPathComponent("local.json"), options: .atomic)
+                try JSONEncoder().encode(base).write(to: backupFolder.appendingPathComponent("baseline.json"), options: .atomic)
+            }
             let ref = Firestore.firestore().collection("users").document(uid).collection("sathi").document("snapshot")
             let result: Data = try await withCheckedThrowingContinuation { continuation in
                 Firestore.firestore().runTransaction({ transaction, errorPointer -> Any? in
@@ -193,7 +201,11 @@ final class CloudSyncStore: ObservableObject {
                             guard base.records.isEmpty else { throw SyncFailure.invalidData }
                             remote = .init()
                         }
-                        let merged = try SyncSnapshot.merge(base: base, local: local, remote: remote)
+                        if resolving != nil {
+                            // Retain every transaction revision before an explicit conflict choice.
+                            try JSONEncoder().encode(remote).write(to: backupFolder.appendingPathComponent("remote-" + UUID().uuidString + ".json"), options: .atomic)
+                        }
+                        let merged = try SyncSnapshot.merge(base: base, local: local, remote: remote, resolving: resolving)
                         let payload = try JSONEncoder().encode(merged)
                         guard payload.count < 900_000 else { throw SyncFailure.oversized }
                         if merged != remote || !doc.exists {
@@ -218,6 +230,7 @@ final class CloudSyncStore: ObservableObject {
             baseline = merged
             lastSync = checkpoint.lastSync
             hasCheckedCloud = true
+            hasConflict = false
             do {
                 try await syncActivity(uid: uid)
             } catch {
@@ -225,7 +238,10 @@ final class CloudSyncStore: ObservableObject {
                 return
             }
             status = "Up to date"
-        } catch { status = "Sync not completed: \(error.localizedDescription)" }
+        } catch {
+            if error.localizedDescription.contains("Both devices changed") { hasConflict = true }
+            status = "Sync not completed: \(error.localizedDescription)"
+        }
     }
 
     private struct Baseline: Codable { let owner: String; let snapshot: SyncSnapshot; let lastSync: Date }
@@ -260,6 +276,9 @@ struct GoogleOnboardingView: View {
 struct CloudSyncPanel: View {
     @ObservedObject var store: CloudSyncStore
     let saveAndSync: () -> Void
+    let resolveConflict: (SyncConflictResolution) -> Void
+    @State private var proposedResolution: SyncConflictResolution?
+    @State private var confirmingResolution = false
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Your SATHI account").font(.headline)
@@ -268,9 +287,22 @@ struct CloudSyncPanel: View {
             Text("Use this personal Google account on all your devices.").font(.caption)
             Button(action: saveAndSync) { Label(store.busy ? "Syncing…" : "Save & Refresh", systemImage: "arrow.triangle.2.circlepath") }.disabled(store.busy)
             Text(store.status).font(.footnote).textSelection(.enabled)
+            if store.hasConflict {
+                Text("Choose which version to use for conflicting records. Both versions are backed up on this device. A timetable conflict also uses that version’s semester, subjects and study preferences. Other independent edits are kept.").font(.caption)
+                Button("Use this device’s version") { proposedResolution = .local; confirmingResolution = true }.disabled(store.busy)
+                Button("Use cloud version") { proposedResolution = .remote; confirmingResolution = true }.disabled(store.busy)
+            }
             if let date = store.lastSync { Text("Last synced: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
-            Text("Saved locally immediately. Syncs every 2 minutes while open and when you return to the app.").font(.caption).foregroundStyle(.secondary)
+            Text("Saved locally immediately. Checks cloud when opened, then hourly when the system permits, or when you tap Save & Refresh. Completed imports upload automatically.").font(.caption).foregroundStyle(.secondary)
             Button("Sign out") { store.signOut() }.disabled(store.busy)
         }.padding()
+        .confirmationDialog("Resolve conflicting changes?", isPresented: $confirmingResolution, titleVisibility: .visible) {
+            Button(proposedResolution == .local ? "Use this device’s version" : "Use cloud version") {
+                if let proposedResolution { resolveConflict(proposedResolution) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The selected version replaces conflicts and related timetable selections. Both snapshots are saved in this device’s private conflict backups first.")
+        }
     }
 }

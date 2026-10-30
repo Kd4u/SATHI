@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
       selectedDate = LocalDate.parse(saved.getString("date", Schedule.today().toString()));
     }
     render();
-    if (FirebaseAuth.getInstance().getCurrentUser() != null && !store.hasTimetable()) sync(false);
+    if (FirebaseAuth.getInstance().getCurrentUser() != null) sync(false);
     handler.postDelayed(hourly, 60000);
   }
 
@@ -86,6 +86,12 @@ public class MainActivity extends Activity {
     super.onSaveInstanceState(out);
     out.putInt("tab", tabIndex);
     out.putString("date", selectedDate.toString());
+  }
+
+  public void onResume() {
+    super.onResume();
+    if (store != null && FirebaseAuth.getInstance().getCurrentUser() != null
+        && System.currentTimeMillis() - store.lastSync() >= 3600000) sync(false);
   }
 
   public void onPause() {
@@ -407,9 +413,13 @@ public class MainActivity extends Activity {
     }
   }
 
-  void sync(boolean explicit) {
+  private boolean pendingSync = false;
+
+  void sync(boolean explicit) { sync(explicit, null); }
+
+  void sync(boolean explicit, Boolean preferLocal) {
     flushDraft();
-    if (store.busy()) return;
+    if (store.busy()) { if (preferLocal == null) pendingSync = true; return; }
     status = "Syncing in the background…";
     if (tabIndex == 4) render();
     store.sync(
@@ -417,9 +427,20 @@ public class MainActivity extends Activity {
             runOnUiThread(
                 () -> {
                   status = message;
+                  if (pendingSync) { pendingSync = false; handler.post(() -> sync(false)); }
                   if (editor == null) render();
-                  if (explicit) Toast.makeText(this, message, Toast.LENGTH_LONG).show();
-                }));
+                  if (explicit) {
+                    Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                    if (!ok && message.contains("Both devices changed")) {
+                      new AlertDialog.Builder(this)
+                        .setTitle("Choose a version for conflicting records")
+                        .setMessage("Both versions will be backed up on this device first. Timetable conflicts also use that version’s semester, subjects and study preferences. Other independent edits are kept. If your Mac has the correct timetable, sync it there first, then choose cloud here.")
+                        .setPositiveButton("Use cloud", (d, w) -> sync(true, false))
+                        .setNegativeButton("Use this device", (d, w) -> sync(true, true))
+                        .setNeutralButton("Cancel", null).show();
+                    }
+                  }
+                }), preferLocal);
   }
 
   void dateRow(LinearLayout parent) {
@@ -1070,6 +1091,7 @@ public class MainActivity extends Activity {
                       "firstYearSection",
                       section.getText().toString().trim().toUpperCase(Locale.ROOT));
                   store.put("study:preferences", p);
+                  sync(false);
                   ScheduleWidget.refresh(this);
                   render();
                 } catch (Exception e) {
@@ -1204,6 +1226,7 @@ public class MainActivity extends Activity {
                   for (int i = 0; i < subjects.length(); i++)
                     keys.put(subjects.getJSONObject(i).getString("key"));
                   store.importReport(report, keys, number);
+                  sync(false);
                   status = "Timetable saved. Choose your subjects and section in Settings.";
                   ScheduleWidget.refresh(this);
                   render();

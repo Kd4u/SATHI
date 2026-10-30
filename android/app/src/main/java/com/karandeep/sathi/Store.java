@@ -153,7 +153,9 @@ public final class Store {
     atomic(file, list.toString().getBytes(StandardCharsets.UTF_8));
   }
 
-  public void sync(Completion callback) {
+  public void sync(Completion callback) { sync(callback, null); }
+
+  public void sync(Completion callback, Boolean preferLocal) {
     final String uid;
     final File directory;
     final Map<String, String> local, base;
@@ -183,6 +185,12 @@ public final class Store {
             if (!base.isEmpty() && local.isEmpty())
               throw new Exception(
                   "Local storage is unexpectedly empty. Sync stopped to protect cloud data.");
+            final File conflictBackup = new File(directory, "SyncConflictBackups/" + UUID.randomUUID());
+            if (preferLocal != null) {
+              if (!conflictBackup.mkdirs()) throw new IOException("Could not save conflict backup");
+              atomic(new File(conflictBackup, "local.json"), Snapshot.encode(local));
+              atomic(new File(conflictBackup, "baseline.json"), Snapshot.encode(base));
+            }
             FirebaseFirestore db = FirebaseFirestore.getInstance();
             DocumentReference ref =
                 db.collection("users").document(uid).collection("sathi").document("snapshot");
@@ -202,7 +210,9 @@ public final class Store {
                               remote = Snapshot.decode(payload.toBytes());
                             } else if (!base.isEmpty())
                               throw new Exception("Cloud snapshot is missing. Local data is safe.");
-                            Map<String, String> merged = Snapshot.merge(base, local, remote);
+                            if (preferLocal != null)
+                              atomic(new File(conflictBackup, "remote-" + UUID.randomUUID() + ".json"), Snapshot.encode(remote));
+                            Map<String, String> merged = Snapshot.merge(base, local, remote, preferLocal);
                             byte[] bytes = Snapshot.encode(merged);
                             if (bytes.length >= 900000)
                               throw new Exception("Cloud snapshot exceeds size limit");

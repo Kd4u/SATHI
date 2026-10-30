@@ -22,6 +22,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var showSync = false
     @State private var hasRestored = false
+    @State private var pendingExplicitSync = false
     @State private var observedSnapshot = SyncSnapshot()
     @State private var useCachedCopy = false
     @Environment(\.colorScheme) private var colorScheme
@@ -191,7 +192,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSync) {
             VStack {
-                CloudSyncPanel(store: cloud) { Task { await syncNow() } }
+                CloudSyncPanel(store: cloud, saveAndSync: { Task { await syncNow() } }, resolveConflict: { choice in Task { await syncNow(resolving: choice) } })
                 Button("Done") { showSync = false }.padding(.bottom)
             }.frame(minWidth: 300, idealWidth: 420)
         }
@@ -199,6 +200,7 @@ struct ContentView: View {
             guard let uid = cloud.accountID, cloud.signedIn else { return }
             do { try study.configure(directory: cloud.dataDirectory, uid: uid, journal: cloud.journal) }
             catch { notice = error.localizedDescription; return }
+            pendingExplicitSync = false
             restore()
             loadedAccountID = uid
             if let report { try? study.ensureSemesterID(seed: report.workbook + (report.sessions.map(\.date).min() ?? "")) }
@@ -214,6 +216,8 @@ struct ContentView: View {
             if let report { try? study.ensureSemesterID(seed: report.workbook + (report.sessions.map(\.date).min() ?? "")) }
             consumeNotificationAction()
             await refreshSurfaces()
+            // Restore this account once on launch without blocking its cached UI.
+            await syncNow(automatic: true)
             var nextAutomaticSync = Date().addingTimeInterval(3600)
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 30_000_000_000) } catch { break }
@@ -230,7 +234,10 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active && cloud.signedIn { clockNow = Date(); Task { await refreshSurfaces() } }
+            if phase == .active && cloud.signedIn {
+                clockNow = Date()
+                Task { await refreshSurfaces(); await syncNow(automatic: true) }
+            }
             if phase == .background { BackgroundSync.schedule() }
         }
         .onChange(of: cloud.signedIn) { _, signedIn in
@@ -254,6 +261,7 @@ struct ContentView: View {
                         if study.workspace.preferences.manualSelections == nil { study.workspace.preferences.manualSelections = [:] }
                         study.workspace.preferences.manualSelections?[study.workspace.currentSemesterID] = chosen.sorted()
                         try study.saveWorkspace(); persist(); showManualReview = false
+                        Task { await syncNow() }
                     } catch { notice = error.localizedDescription }
                 }
             }
@@ -309,6 +317,7 @@ struct ContentView: View {
         }
         .onChange(of: page) { _, value in
             guard hasRestored, cloud.signedIn else { return }
+            if value == .overview || value == .timetable { Task { await syncNow() } }
             do { try cloud.journal.record("screen_opened", details: ["screen": value.rawValue]) }
             catch { notice = "Activity log could not be saved: \(error.localizedDescription)" }
         }
@@ -794,12 +803,22 @@ struct ContentView: View {
         return snapshot
     }
 
-    @MainActor private func syncNow(automatic: Bool = false) async {
-        if automatic && !SyncCadence.isDue(lastSync: cloud.lastSync, now: Date()) { return }
-        guard !cloud.busy, let uid = cloud.accountID, loadedAccountID == uid, hasRestored else { return }
+    @MainActor private func syncNow(automatic: Bool = false, resolving: SyncConflictResolution? = nil) async {
+        if automatic && cloud.hasCheckedCloud && !SyncCadence.isDue(lastSync: cloud.lastSync, now: Date()) { return }
+        guard let uid = cloud.accountID, loadedAccountID == uid, hasRestored else { return }
+        if cloud.busy {
+            if !automatic && resolving == nil { pendingExplicitSync = true }
+            return
+        }
+        defer {
+            if pendingExplicitSync && cloud.accountID == uid {
+                pendingExplicitSync = false
+                Task { await syncNow() }
+            }
+        }
         do {
             let captured = try syncSnapshot()
-            await cloud.sync(local: captured) { downloaded in
+            await cloud.sync(local: captured, resolving: resolving) { downloaded in
                 guard cloud.accountID == uid, loadedAccountID == uid else { throw SyncFailure.account }
                 let current = try syncSnapshot()
                 let merged = try SyncSnapshot.merge(base: captured, local: current, remote: downloaded)
@@ -1068,6 +1087,7 @@ struct ContentView: View {
                             page = .overview
                             notice = "Restored \(parsed.sessions.count - existing.sessions.count) omitted classes. Attendance, notes and selections retained."
                             persist()
+                            Task { await syncNow() }
                         } catch { notice = "Could not repair the saved import: \(error.localizedDescription)" }
                         return
                     }
@@ -1087,6 +1107,7 @@ struct ContentView: View {
                             try JSONEncoder().encode(existing).write(to: backup.appendingPathComponent("timetable.json"), options: .atomic)
                             try JSONEncoder().encode(merged).write(to: storageDirectory.appendingPathComponent("timetable.json"), options: .atomic)
                             report = merged; additionalProgramme = nil; persist(); showWholeSchedule = true
+                            Task { await syncNow() }
                             notice = "Added the \(course) schedule. Your own timetable and attendance were retained."
                         } catch { notice = error.localizedDescription }
                         return
@@ -1114,6 +1135,7 @@ struct ContentView: View {
                     selectedDate = Date()
                     notice = semester == nil ? "Timetable imported. Choose your semester to continue." : "Next semester imported. Your previous semester is in History."
                     persist()
+                    Task { await syncNow() }
                     do { try cloud.journal.record("excel_imported", details: ["filename": url.lastPathComponent, "classes": String(parsed.sessions.count), "subjects": String(parsed.subjects.count)]) }
                     catch { notice = "Timetable saved, but activity logging failed: \(error.localizedDescription)" }
                 }

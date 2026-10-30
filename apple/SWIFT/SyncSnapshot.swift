@@ -4,21 +4,47 @@ import Foundation
 struct SyncSnapshot: Codable, Equatable {
     var records: [String: Data] = [:]
 
-    static func merge(base: Self, local: Self, remote: Self) throws -> Self {
+    static func equivalent(_ lhs: Data?, _ rhs: Data?) -> Bool {
+        if lhs == rhs { return true }
+        guard let lhs, let rhs,
+              let left = try? JSONSerialization.jsonObject(with: lhs, options: [.fragmentsAllowed]),
+              let right = try? JSONSerialization.jsonObject(with: rhs, options: [.fragmentsAllowed]),
+              let a = try? JSONSerialization.data(withJSONObject: left, options: [.sortedKeys, .fragmentsAllowed]),
+              let b = try? JSONSerialization.data(withJSONObject: right, options: [.sortedKeys, .fragmentsAllowed]) else { return false }
+        return a == b
+    }
+
+    static func merge(base: Self, local: Self, remote: Self, resolving: SyncConflictResolution? = nil) throws -> Self {
         var result = remote
-        for key in Set(base.records.keys).union(local.records.keys) {
+        for key in Set(base.records.keys).union(local.records.keys).sorted() {
             let before = base.records[key]
             let after = local.records[key]
-            guard before != after else { continue }
+            guard !equivalent(before, after) else { continue }
             let cloud = remote.records[key]
-            guard cloud == before || cloud == after else {
-                throw SyncFailure.conflict(key)
+            guard equivalent(cloud, before) || equivalent(cloud, after) else {
+                switch resolving {
+                case .local: result.records[key] = after; continue
+                case .remote: continue
+                case nil: throw SyncFailure.conflict(key)
+                }
             }
             result.records[key] = after
+        }
+        // A timetable and its selected subjects/semester must travel together.
+        let key = "timetable"
+        if let resolving, !equivalent(base.records[key], local.records[key]),
+           !equivalent(remote.records[key], base.records[key]),
+           !equivalent(remote.records[key], local.records[key]) {
+            let source = resolving == .local ? local : remote
+            for related in ["timetable", "selection", "study:semesters", "study:preferences"] {
+                result.records[related] = source.records[related]
+            }
         }
         return result
     }
 }
+
+enum SyncConflictResolution { case local, remote }
 
 enum SyncFailure: LocalizedError {
     case conflict(String), configuration, account, oversized, invalidData

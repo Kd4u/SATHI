@@ -6,7 +6,7 @@ SATHI has two native clients and one compatible Firebase data contract. SwiftUI 
 
 Clients scope saved files to the authenticated Firebase UID rather than sharing a global cache between accounts. Local writes use atomic replacement. A cached timetable is shown immediately; network requests and workbook parsing should not block drawing, typing or initial presentation.
 
-Explicit Sync exchanges changes. Roughly hourly background opportunities are also scheduled, subject to platform scheduling and battery limits. No real-time Firestore listener is used for the main timetable. An account with no local timetable can fetch cloud data during first sign-in.
+Clients check the account snapshot once on launch without blocking the cached UI. Completed imports and onboarding selections upload immediately; ordinary edits use explicit Sync or roughly hourly opportunities, subject to platform scheduling and battery limits. No real-time Firestore listener is used for the main timetable.
 
 ## Timetable snapshot
 
@@ -14,7 +14,7 @@ Explicit Sync exchanges changes. Roughly hourly background opportunities are als
 
 Keys include `timetable`, `selection`, `attendance:{id}`, `event:{uuid}`, `study:preferences`, `study:semesters`, `study:proof:{id}` and `study:override:{id}`. Preserve unknown keys byte-for-byte. Session IDs derived from worksheet/cell/index allow attendance to refer to the same imported class on both platforms. Swift dates use seconds from 2001-01-01 unless the model specifies a date string.
 
-Sync uses a three-way comparison between a saved baseline, the local snapshot and the remote snapshot, inside a Firestore transaction. Independent edits merge; divergent changes to the same key produce a conflict. Android also merges edits made while the request was running into the local result, so a network response cannot discard fresh local typing/changes.
+Sync uses a three-way comparison between a saved baseline, the local snapshot and the remote snapshot, inside a Firestore transaction. Independent edits merge; divergent changes to the same key produce a conflict. JSON record comparisons ignore object-key order and formatting differences across clients. An explicit conflict choice selects this device or cloud for conflicting records. A timetable conflict also selects its associated subject selection, semester index and study preferences as one bundle, preventing an accepted timetable from showing zero classes under another import’s selection. Both snapshots and the baseline are saved in private SyncConflictBackups before a resolving transaction writes; independent edits are retained. In-flight edits still use the normal conflict-protected merge. Android also merges edits made while the request was running into the local result, so a network response cannot discard fresh local typing/changes.
 
 The shared snapshot stays below the Firestore document-size limit; clients reject oversized payloads before committing. Do not store drawing blobs inside this single document.
 

@@ -73,7 +73,7 @@ Use a separate test Google account, never a real class's exported records as a f
 2. Sign in with the same account on B and restore/sync without importing again.
 3. Record attendance on A; sync A, then B; confirm the same class status.
 4. Edit different records offline on A and B; sync and verify both changes survive.
-5. Edit the same record on both; verify the conflict is reported and neither draft disappears.
+5. Edit the same record on both; verify the conflict is reported and neither draft disappears. Choose the correct version explicitly (Apple: Google account panel; Android: tap Sync), verify private conflict backups exist and unrelated changes from both clients survive.
 6. Create/edit a typed note; sync and verify the content and account boundary.
 7. Sign in with a different account and confirm the original account's private data is not shown.
 
