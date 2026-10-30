@@ -55,6 +55,7 @@ struct SATHICommandCenter: View {
     @State private var editingImported: SATHICommandEvent?
     @State private var calendarWeek = true
     @State private var tableCalendar = false
+    @State private var showPhoneWhole = false
     @State private var campusDocument: String?
     @State private var selectedSubject: TimetableSubject?
 
@@ -103,7 +104,7 @@ struct SATHICommandCenter: View {
     #if os(iOS)
     private var phoneBody: some View {
         TabView(selection: $page) {
-            ForEach([SATHIPage.today, .whole, .notes, .dashboard, .settings]) { item in
+            ForEach([SATHIPage.today, .calendar, .notes, .dashboard, .settings]) { item in
                 NavigationStack {
                     ScrollView {
                         pageContent(item).padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -124,6 +125,15 @@ struct SATHICommandCenter: View {
             }
         }
         .background(AccentTabBar(color: accent).frame(width: 0, height: 0))
+        .sheet(isPresented: $showPhoneWhole) {
+            NavigationStack {
+                ScrollView {
+                    if let timetableReport { WholeTimetableGrid(report: timetableReport, onRequestProgramme: onRequestProgramme).padding(16) }
+                }
+                .navigationTitle("Whole timetable").navigationBarTitleDisplayMode(.inline)
+                .toolbar { Button("Done") { showPhoneWhole = false } }
+            }
+        }
         .sheet(isPresented: $showUpcoming) {
             NavigationStack { ScrollView { glimpsePage(all: true).padding() }.navigationTitle("Upcoming classes").toolbar { Button("Done") { showUpcoming = false } } }
         }
@@ -278,7 +288,17 @@ struct SATHICommandCenter: View {
     private var calendarPage: some View {
         VStack(alignment: .leading, spacing: 20) {
             sectionHeading("Calendar", detail: "Your classes and activities")
-            HStack { Button("Whole timetable", systemImage: "tablecells", action: onWholeSchedule); Spacer(); Button("Past semesters", systemImage: "clock.arrow.circlepath", action: onHistory) }
+            HStack {
+                Button("Whole timetable", systemImage: "tablecells") {
+                    #if os(iOS)
+                    if UIDevice.current.userInterfaceIdiom == .phone { showPhoneWhole = true } else { onWholeSchedule() }
+                    #else
+                    onWholeSchedule()
+                    #endif
+                }.font(.subheadline).buttonStyle(.bordered)
+                Spacer()
+                Button(action: onHistory) { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Past semesters")
+            }
             Picker("Calendar view", selection: $calendarWeek) { Text("Week").tag(true); Text("Month").tag(false) }.pickerStyle(.segmented).frame(maxWidth: 260)
             if isCompact || calendarWeek {
                 if calendarWeek { calendarWeekStrip } else { calendarCard }

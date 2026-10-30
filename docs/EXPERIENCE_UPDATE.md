@@ -32,6 +32,6 @@ Run `apple/SyncChecks/run.sh` and Android `assembleDebug lintDebug testDebugUnit
 
 ### Timetable navigation and notebook shelf
 
-The phone tab bar now exposes Timetable directly, with Whole timetable and Calendar views. Mac and iPad retain separate sidebar entries. The whole timetable browses all uploaded sessions with subject/section rows and date columns, course filters, search and two-axis scrolling. Its range ends at the uploaded data.
+The phone tab bar exposes Calendar directly. A small Whole timetable button opens a seven-day agenda of all uploaded classes, with previous/next navigation, date jump, course/section filters and subject search. Mac and iPad retain separate sidebar entries. The whole timetable browses all uploaded sessions with subject/section rows and date columns, course filters, search and two-axis scrolling. Its range ends at the uploaded data.
 
 Notebooks opens the selection shelf rather than automatically reopening the previous book. Dashboard subject cards show numbered lecture tiles directly, with guest/activity tiles in chronological order and attendance/rescheduling menus.
