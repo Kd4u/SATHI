@@ -18,3 +18,6 @@ compile SWIFT/SharedSurfaces.swift SWIFT/SyncSnapshot.swift SyncChecks/Widgets/c
 
 compile SWIFT/NotebookModels.swift SWIFT/TimetableModels.swift SWIFT/StudyDomain.swift SWIFT/SharedSurfaces.swift SWIFT/EventPresentation.swift SyncChecks/Notebook/check.swift -o "$checks_dir/notebook"
 "$checks_dir/notebook"
+
+compile SWIFT/TimetableCellClassifier.swift SyncChecks/Classifier/check.swift -o "$checks_dir/classifier"
+"$checks_dir/classifier" SWIFT/TimetableCellRole.json

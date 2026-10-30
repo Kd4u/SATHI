@@ -980,12 +980,33 @@ struct ContentView: View {
             do {
                 let access = url.startAccessingSecurityScopedResource()
                 defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let sourceData = try Data(contentsOf: url)
                 let parsed = try TimetableLogic().read(url: url)
                 DispatchQueue.main.async {
                     guard cloud.accountID == importAccount, loadedAccountID == importAccount else { return }
                     importing = false
                     guard !parsed.sessions.isEmpty else {
                         notice = "No classes detected. Please check the workbook layout."
+                        return
+                    }
+                    // Keep the original workbook privately for later audits/reparsing.
+                    do {
+                        let sources = storageDirectory.appendingPathComponent("ImportSources", isDirectory: true)
+                        try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+                        try sourceData.write(to: sources.appendingPathComponent(UUID().uuidString + ".xlsx"), options: .atomic)
+                    } catch { notice = "Could not preserve the source workbook: \(error.localizedDescription)"; return }
+                    if let existing = report, !nextSemesterImport, semester != nil,
+                       TimetableIdentity.canSupplement(existing, with: parsed), selectedKeys.isSubset(of: Set(parsed.subjects.map(\.key))) {
+                        do {
+                            let backup = storageDirectory.appendingPathComponent("ImportRepair-" + UUID().uuidString, isDirectory: true)
+                            try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+                            try JSONEncoder().encode(existing).write(to: backup.appendingPathComponent("timetable.json"), options: .atomic)
+                            try JSONEncoder().encode(parsed).write(to: storageDirectory.appendingPathComponent("timetable.json"), options: .atomic)
+                            report = parsed
+                            page = .overview
+                            notice = "Restored \(parsed.sessions.count - existing.sessions.count) omitted classes. Attendance, notes and selections retained."
+                            persist()
+                        } catch { notice = "Could not repair the saved import: \(error.localizedDescription)" }
                         return
                     }
                     let previousSemester = semester

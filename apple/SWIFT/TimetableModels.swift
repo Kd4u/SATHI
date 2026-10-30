@@ -97,6 +97,18 @@ nonisolated enum TimetableIdentity {
         guard changed else { return (report, keys, false) }
         return (TimetableReport(workbook: report.workbook, sessions: rows, subjects: subjects(rows), events: report.events, warnings: report.warnings), keys, true)
     }
+    /// A same-timetable supplement may add missing cells, but cannot remove or
+    /// reinterpret existing classes. It must retain every attendance identifier.
+    static func canSupplement(_ existing: TimetableReport, with incoming: TimetableReport) -> Bool {
+        guard !existing.sessions.isEmpty, incoming.sessions.count > existing.sessions.count else { return false }
+        let rows = Dictionary(incoming.sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        guard rows.count == incoming.sessions.count else { return false }
+        return existing.sessions.allSatisfy { old in
+            guard let new = rows[old.id] else { return false }
+            return old.date == new.date && old.source == new.source && old.time == new.time &&
+                old.subject == new.subject && old.section == new.section
+        }
+    }
     static func subjects(_ sessions: [TimetableSession]) -> [TimetableSubject] {
         Dictionary(grouping: sessions, by: { $0.subject + "|" + $0.section }).map { key, rows in
             let first = rows[0], count = rows.count

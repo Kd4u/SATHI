@@ -33,3 +33,9 @@ Apple widgets/Live Activities use a saved shared schedule surface, not a Firebas
 ## Attendance
 
 Unmarked means unknown. Official duty counts as present. Fingerprint and sheet confirmation remain distinct from attendance. The current configurable app policy can penalize a fingerprint/sheet mismatch by marking the next three scheduled classes missed; this is a user-facing planning rule, not a connection to institutional records. Keep all affected classes visible in the timetable.
+
+## Timetable extraction and cell-role model
+
+Apple decodes XLSX cells with CoreXLSX and applies a small trained logistic cell-role classifier from `SWIFT/TimetableCellRole.json`. It runs locally in native Swift and distinguishes class candidates from events/background. Source positions, time parsing, name normalization, programme/section handling and completeness checks remain explicit. See [training/evaluation](../training/timetable/README.md) and [import repair](TIMETABLE_IMPORT.md). Android currently uses its existing deterministic parser; no Android model integration is claimed here.
+
+A matching-timetable supplement requires every saved class identity and source/date/time/subject/section to remain present, then permits added cells while retaining selections, attendance and semester state. Original workbooks are retained privately on the importing device for future audit. Those source files are not automatically uploaded as part of the shared JSON snapshot.

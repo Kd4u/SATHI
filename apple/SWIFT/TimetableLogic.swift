@@ -13,7 +13,7 @@ private struct TimetableCell {
 // MARK: - Excel timetable reader
 
 struct TimetableLogic {
-    func read(url: URL) throws -> TimetableReport {
+    func read(url: URL, modelURL: URL? = nil) throws -> TimetableReport {
         guard let file = XLSXFile(filepath: url.path) else {
             throw NSError(
                 domain: "SATHI", code: 1,
@@ -30,6 +30,8 @@ struct TimetableLogic {
         var sessions: [TimetableSession] = []
         var events: [TimetableEvent] = []
         var warnings: [String] = []
+        let classifier = TimetableCellClassifier(url: modelURL)
+        if !classifier.available { warnings.append("Cell-role model unavailable; deterministic matching used. Review unmatched entries.") }
 
         for (sheetIndex, sheetPath) in paths.enumerated() {
             let stableSheetID = "Sheet\(sheetIndex + 1)"
@@ -43,9 +45,9 @@ struct TimetableLogic {
                     guard let position = cellPosition(address) else { continue }
                     let raw: String
                     if let sharedStrings = sharedStrings {
-                        raw = cell.stringValue(sharedStrings) ?? cell.value ?? ""
+                        raw = cell.stringValue(sharedStrings) ?? cell.inlineString?.text ?? cell.value ?? ""
                     } else {
-                        raw = cell.value ?? ""
+                        raw = cell.inlineString?.text ?? cell.value ?? ""
                     }
                     let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !value.isEmpty else { continue }
@@ -100,10 +102,14 @@ struct TimetableLogic {
 
             // Only reuse a course identity seen with explicit faculty elsewhere in this sheet.
             var knownCourses = Set<String>()
+            var courseOccurrences: [String: Int] = [:]
             for number in rowNumbers where number > headerRow && !excelDate(byRow[number]?[dateColumn]?.text ?? "").isEmpty {
                 for (column, _) in timeColumns {
                     let entries = splitEntries(byRow[number]?[column]?.text ?? "")
                     let teachers = splitEntries(byRow[number + 1]?[column]?.text ?? "")
+                    for entry in entries where !isTimeSlot(entry) {
+                        courseOccurrences[extractSection(entry).0, default: 0] += 1
+                    }
                     if teachers.contains(where: isProfessor) {
                         for entry in entries where !isTimeSlot(entry) { knownCourses.insert(extractSection(entry).0) }
                     }
@@ -128,7 +134,7 @@ struct TimetableLogic {
                     let faculty = splitEntries(facultyRow[column]?.text ?? "")
 
                     // Whole-cell events can span several lines; preserve their title.
-                    if looksLikeEvent(cell.text) && !faculty.contains(where: isProfessor) {
+                    if looksLikeEvent(cell.text) && !faculty.contains(where: isProfessor) && !courseEntries.contains(where: { knownCourses.contains(extractSection($0).0) }) {
                         events.append(TimetableEvent(
                             date: date, time: slot, title: cell.text, source: source
                         ))
@@ -155,7 +161,11 @@ struct TimetableLogic {
                             teacher = ""
                         }
 
-                        if looksLikeEvent(entry) && !isProfessor(teacher) && !knownCourses.contains(extractSection(entry).0) {
+                        let courseName = extractSection(entry).0
+                        let probability = classifier.classProbability(text: entry, faculty: teacher,
+                            repetitions: courseOccurrences[courseName] ?? 0, knownCourse: knownCourses.contains(courseName))
+                        let modelClass = (probability ?? 0) >= 0.5
+                        if looksLikeEvent(entry) && !isProfessor(teacher) && !knownCourses.contains(courseName) && !modelClass {
                             events.append(TimetableEvent(
                                 date: date, time: slot, title: entry, source: source
                             ))
@@ -164,7 +174,7 @@ struct TimetableLogic {
 
                         // A real subject requires a professor in the row immediately below.
                         // Unpaired entries are displayed as events, never assigned credits.
-                        guard isProfessor(teacher) || knownCourses.contains(extractSection(entry).0) else {
+                        guard isProfessor(teacher) || knownCourses.contains(courseName) || modelClass else {
                             events.append(TimetableEvent(
                                 date: date, time: slot, title: entry, source: source
                             ))
@@ -175,7 +185,8 @@ struct TimetableLogic {
                         }
 
                         if !isProfessor(teacher) {
-                            warnings.append("\(source): known course with missing/unconfirmed faculty; verify instructor")
+                            let confidence = probability.map { String(format: "%.1f%%", $0 * 100) } ?? "unavailable"
+                            warnings.append("\(source): course with missing/unconfirmed faculty (cell-role score \(confidence)); verify instructor")
                         }
                         let (name, inlineSection) = extractSection(entry)
                         let section = inlineSection.isEmpty ? inheritedSection : inlineSection

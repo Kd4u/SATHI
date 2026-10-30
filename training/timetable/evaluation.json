@@ -1,0 +1,69 @@
+{
+  "method": "Leave-one-workbook-out; reviewed catalogue labels, not independently double-annotated.",
+  "examplesSHA256": "eb2ee67ce5256a9f9cae288e7198b1ae1fa422004efc74a63134c748f4c44fab",
+  "features": [
+    "faculty",
+    "knownCourse",
+    "repeated",
+    "tbd",
+    "guest",
+    "event",
+    "time",
+    "placeholder",
+    "words",
+    "numbered",
+    "section"
+  ],
+  "trainingExamples": 3996,
+  "augmentedPositiveTrainingRows": 2700,
+  "heldOutFold": 4,
+  "heldOutExamples": 588,
+  "augmentation": "Mask faculty and knownCourse on training-positive rows only.",
+  "folds": [
+    {
+      "fold": 0,
+      "examples": 979,
+      "accuracy": 1.0,
+      "classPrecision": 1.0,
+      "classRecall": 1.0,
+      "falsePositive": 0,
+      "falseNegative": 0
+    },
+    {
+      "fold": 1,
+      "examples": 1155,
+      "accuracy": 1.0,
+      "classPrecision": 1.0,
+      "classRecall": 1.0,
+      "falsePositive": 0,
+      "falseNegative": 0
+    },
+    {
+      "fold": 2,
+      "examples": 1158,
+      "accuracy": 0.9835924006908463,
+      "classPrecision": 0.971976401179941,
+      "classRecall": 1.0,
+      "falsePositive": 19,
+      "falseNegative": 0
+    },
+    {
+      "fold": 3,
+      "examples": 704,
+      "accuracy": 1.0,
+      "classPrecision": 1.0,
+      "classRecall": 1.0,
+      "falsePositive": 0,
+      "falseNegative": 0
+    },
+    {
+      "fold": 4,
+      "examples": 588,
+      "accuracy": 1.0,
+      "classPrecision": 1.0,
+      "classRecall": 1.0,
+      "falsePositive": 0,
+      "falseNegative": 0
+    }
+  ]
+}
