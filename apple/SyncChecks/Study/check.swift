@@ -26,6 +26,12 @@ import Foundation
         legacyJSON.removeValue(forKey: "appearanceMode"); legacyJSON.removeValue(forKey: "glassStyle")
         let legacyRestored = try JSONDecoder().decode(StudyPreferences.self, from: JSONSerialization.data(withJSONObject: legacyJSON))
         assert(legacyRestored.appearanceMode == nil && legacyRestored.glassStyle == nil)
+        var manual = StudyPreferences()
+        manual.manualSelections = ["term": ["kept-id"]]
+        manual.proofCrosscheck = true; manual.campusShortcuts = true
+        let restoredManual = try JSONDecoder().decode(StudyPreferences.self, from: JSONEncoder().encode(manual))
+        assert(restoredManual.manualSelections?["term"] == ["kept-id"] && restoredManual.proofCrosscheck == true)
+        assert(StudyPreferences().proofCrosscheck == nil && StudyPreferences().campusShortcuts == nil)
         let preferences = StudyPreferences()
         let first = ClassWindow.make(id: "0", subject: "Operations", date: "2026-10-27", time: "09.00 – 10.30")!
         let at845 = first.start.addingTimeInterval(-15 * 60)
@@ -48,6 +54,8 @@ import Foundation
         proof.officialDuty = true; proof.signedSheet = false
         assert(AttendanceRules.penaltyIDs(windows: windows, proofs: ["0": proof], now: ended).isEmpty)
         assert(AttendanceRules.status(proof: proof, recorded: nil, penalized: true, classEnded: true) == "OD")
+        let simple = AttendanceRules.simple(proofs: ["present": ClassProof(attended: true), "absent": ClassProof(attended: false), "od": proof], recorded: ["manual": "Attended"])
+        assert(simple["present"] == "Attended" && simple["absent"] == "Missed" && simple["od"] == "OD" && simple["manual"] == "Attended")
         let pending = ClassProof(attended: true)
         assert(AttendanceRules.status(proof: pending, recorded: nil, penalized: false, classEnded: true) == nil)
         let raw = TimetableSession(id: "stable-id", date: "2026-10-27", day: "Tuesday", time: "09:00 – 10:30", subject: "Operations", section: "A", teacher: "Faculty", source: "Sheet1")

@@ -37,6 +37,7 @@ struct NotebookEditorView: View {
         #endif
     }()
     @State private var expanded = true
+    @State private var proMode = false
     @State private var showBookSettings = false
     @State private var showPaper = false
     @State private var showPages = false
@@ -64,7 +65,7 @@ struct NotebookEditorView: View {
                                 let scale = baseWidth / size.width * session.zoom
                                 Group {
                                     if abs(index - session.focusedPage) <= 1 {
-                                        NotebookLivePage(store: store, session: session, book: book, pageID: id, tool: tool, fingerDrawing: fingerDrawing, focused: index == session.focusedPage,
+                                        NotebookLivePage(store: store, session: session, book: book, pageID: id, tool: tool, fingerDrawing: fingerDrawing, focused: index == session.focusedPage, proMode: proMode,
                                             onFocus: { active = $0; session.focusedPage = index },
                                             onSave: { old, _ in if old == draftID && store.revision(old) != nil { draftID = UUID().uuidString } },
                                             onOverflow: { item, after in continueText(item, after: after, proxy: proxy) },
@@ -91,8 +92,9 @@ struct NotebookEditorView: View {
                             }
                         }
                         .padding(12)
+                        .frame(minWidth: geometry.size.width, alignment: .center)
                         #if os(iOS)
-                        .background(NotebookPanPolicy(twoFingers: fingerDrawing && tool != .text))
+                        .background(NotebookPanPolicy(twoFingers: (fingerDrawing || tool == .eraser || proMode) && tool != .text))
                         #endif
                     }
                     .coordinateSpace(name: "notebookViewport")
@@ -142,6 +144,7 @@ struct NotebookEditorView: View {
                 Button { showBookSettings = true } label: { Text(book.title).font(.subheadline.weight(.semibold)).lineLimit(1) }
                 Spacer(minLength: 2)
                 Button("\(session.focusedPage + 1) / \(max(book.pageIDs.count, session.focusedPage + 1))") { session.flush(); showPages = true }.font(.caption.monospacedDigit()).accessibilityLabel("Page navigator")
+                Button(proMode ? "Done · normal mode" : "Pro canvas", systemImage: proMode ? "checkmark" : "square.stack.3d.up") { session.flush(); proMode.toggle(); if proMode { tool = .selection } }.font(.caption)
                 Button { expanded.toggle() } label: { Image(systemName: expanded ? "chevron.up" : "chevron.down") }.accessibilityLabel("Collapse writing tools")
                 Image(systemName: "line.3.horizontal").font(.caption).foregroundStyle(.secondary)
                     .gesture(DragGesture().onChanged { value in toolbarOffset = CGSize(width: min(40, max(-40, dragOrigin.width + value.translation.width)), height: min(160, max(0, dragOrigin.height + value.translation.height))) }.onEnded { _ in dragOrigin = toolbarOffset })
@@ -171,6 +174,7 @@ struct NotebookEditorView: View {
                     }.font(.system(size: 18)).padding(.vertical, 5)
                 }
                 if tool == .text, let active { NotebookTextFormatting(model: active) }
+                if proMode, let active { NotebookProTools(model: active) }
             }
             if !error.isEmpty { Text(error).font(.caption).foregroundStyle(.red) }
             if let active, !active.error.isEmpty { Text(active.error).font(.caption).foregroundStyle(.red) }
@@ -179,7 +183,7 @@ struct NotebookEditorView: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 20)).padding(.horizontal, 10).padding(.top, 4)
     }
     private func toolButton(_ value: NotebookTool, _ symbol: String, _ title: String) -> some View {
-        Button { tool = value } label: { Image(systemName: symbol).foregroundStyle(Color.accentColor).frame(width: 28, height: 28).background(tool == value ? Color.accentColor.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel(title)
+        Button { tool = value; active?.selectedCanvasID = nil } label: { Image(systemName: symbol).foregroundStyle(Color.accentColor).frame(width: 28, height: 28).background(tool == value ? Color.accentColor.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel(title)
     }
     private func pagesSheet(_ book: NotebookManifest, proxy: ScrollViewProxy) -> some View {
         NavigationStack {
@@ -188,18 +192,36 @@ struct NotebookEditorView: View {
                     Button { showPages = false; session.focusedPage = index; proxy.scrollTo(id, anchor: .top) } label: {
                         HStack { NotebookThumbnail(store: store, id: id).frame(width: 48, height: 68); Text("Page \(index + 1)"); Spacer() }
                     }
+                    .overlay(alignment: .trailing) {
+                        Menu {
+                            Button("Insert page after") { session.flush(); try? store.insertBlankPage(bookID: bookID, after: index) }
+                            Button("Duplicate") { session.flush(); try? store.duplicatePage(id, bookID: bookID) }
+                            Button("Delete page", role: .destructive) { session.flush(); active = nil; try? store.removePage(id, bookID: bookID) }
+                        } label: { Label("Edit", systemImage: "ellipsis.circle") }.padding(.trailing, 8)
+                    }
+                    .swipeActions { Button("Delete", role: .destructive) { session.flush(); active = nil; try? store.removePage(id, bookID: bookID) } }
                     .contextMenu {
+                        Button("Insert page after") { session.flush(); try? store.insertBlankPage(bookID: bookID, after: index) }
                         Button("Duplicate page") { do { try store.duplicatePage(id, bookID: bookID) } catch { self.error = error.localizedDescription } }
                         Button("Move up") { movePage(index, to: index - 1) }.disabled(index == 0)
                         Button("Move down") { movePage(index, to: index + 1) }.disabled(index == book.pageIDs.count - 1)
                         Button("Delete page", role: .destructive) { do { try store.removePage(id, bookID: bookID) } catch { self.error = error.localizedDescription } }
                     }
+                }.onDelete { offsets in
+                    session.flush(); active = nil
+                    for index in offsets { do { try store.removePage(book.pageIDs[index], bookID: bookID) } catch { self.error = error.localizedDescription } }
                 }.onMove { offsets, destination in
                     var next = book; next.pageIDs.move(fromOffsets: offsets, toOffset: destination); try? store.saveBook(next)
                 }
+                Button("Insert blank page after current", systemImage: "plus.rectangle.on.rectangle") { session.flush(); try? store.insertBlankPage(bookID: bookID, after: session.focusedPage) }
                 Button("New page", systemImage: "plus") { showPages = false; session.focusedPage = book.pageIDs.count; proxy.scrollTo(draftID, anchor: .top) }
             }.navigationTitle("Pages")
-                .toolbar { Button("Done") { showPages = false } }
+                .toolbar {
+                    #if os(iOS)
+                    EditButton()
+                    #endif
+                    Button("Done") { showPages = false }
+                }
         }.frame(minWidth: 300, minHeight: 400)
     }
     private func movePage(_ source: Int, to target: Int) {
@@ -269,12 +291,13 @@ private struct NotebookLivePage: View {
     let tool: NotebookTool
     let fingerDrawing: Bool
     let focused: Bool
+    let proMode: Bool
     let onFocus: (NotebookPageModel) -> Void
     let onSave: (String, String) -> Void
     let onContinue: () -> Void
     let onOverflow: (NotebookTextObject, String) -> Void
-    init(store: NotebookStore, session: NotebookSession, book: NotebookManifest, pageID: String, tool: NotebookTool, fingerDrawing: Bool, focused: Bool, onFocus: @escaping (NotebookPageModel) -> Void, onSave: @escaping (String, String) -> Void, onOverflow: @escaping (NotebookTextObject, String) -> Void, onContinue: @escaping () -> Void) {
-        self.store = store; self.session = session; self.pageID = pageID; self.tool = tool; self.fingerDrawing = fingerDrawing; self.focused = focused; self.onFocus = onFocus; self.onSave = onSave; self.onOverflow = onOverflow; self.onContinue = onContinue
+    init(store: NotebookStore, session: NotebookSession, book: NotebookManifest, pageID: String, tool: NotebookTool, fingerDrawing: Bool, focused: Bool, proMode: Bool, onFocus: @escaping (NotebookPageModel) -> Void, onSave: @escaping (String, String) -> Void, onOverflow: @escaping (NotebookTextObject, String) -> Void, onContinue: @escaping () -> Void) {
+        self.store = store; self.session = session; self.pageID = pageID; self.tool = tool; self.fingerDrawing = fingerDrawing; self.focused = focused; self.proMode = proMode; self.onFocus = onFocus; self.onSave = onSave; self.onOverflow = onOverflow; self.onContinue = onContinue
         _model = StateObject(wrappedValue: NotebookPageModel(store: store, book: book, pageID: pageID))
     }
     var body: some View {
@@ -289,6 +312,7 @@ private struct NotebookLivePage: View {
             if tool == .text {
                 Color.clear.contentShape(Rectangle()).gesture(SpatialTapGesture().onEnded { onFocus(model); model.addText(at: $0.location) })
             }
+            NotebookProLayer(model: model, editing: proMode, onActivate: { onFocus(model) })
             ForEach(model.document.textObjects) { item in NotebookTextBox(model: model, id: item.id, editing: tool == .text, onActivate: { onFocus(model) }) }
         }
         .frame(width: paper.width, height: paper.height).clipped()

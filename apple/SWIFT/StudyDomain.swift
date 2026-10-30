@@ -19,6 +19,11 @@ nonisolated struct StudyPreferences: Codable, Equatable, Hashable, Sendable {
     var sheetReminderMinutes = 40
     var firstYearSection = ""
     var programme = "MBA"
+    var studentName: String? = nil
+    var studentSemester: Int? = nil
+    var proofCrosscheck: Bool? = nil
+    var campusShortcuts: Bool? = nil
+    var manualSelections: [String: [String]]? = nil
 }
 
 nonisolated struct ClassProof: Codable, Equatable, Hashable, Sendable {
@@ -129,6 +134,14 @@ nonisolated enum AttendanceRules {
         return recorded
     }
 
+    static func simple(proofs: [String: ClassProof], recorded: [String: String]) -> [String: String] {
+        var result = recorded
+        for (id, proof) in proofs {
+            if proof.officialDuty { result[id] = "OD" }
+            else if let attended = proof.attended { result[id] = attended ? "Attended" : "Missed" }
+        }
+        return result
+    }
     static func hasLiveProxyWarning(proof: ClassProof?, window: ClassWindow, now: Date) -> Bool {
         guard let proof, !proof.officialDuty else { return false }
         return now >= window.start && now < window.end && proof.fingerprint == false
@@ -146,6 +159,7 @@ struct ArchivedSemester: Codable {
     var section: String? = nil
     var customEvents: [SATHICustomEvent]? = nil
     var minimumAttendance: Int? = nil
+    var selectedSessionIDs: [String]? = nil
 }
 
 

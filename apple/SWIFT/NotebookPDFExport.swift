@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import CoreText
+import ImageIO
 import PencilKit
 #if os(iOS)
 import UIKit
@@ -88,6 +89,33 @@ nonisolated enum NotebookPDFExport {
                 #endif
                 if let cg { context.draw(cg, in: CGRect(x: bounds.minX, y: h - bounds.maxY, width: bounds.width, height: bounds.height)) }
             }
+        }
+        for element in page.elements ?? [] {
+            context.saveGState(); context.setAlpha(element.opacity)
+            let rect = CGRect(x: element.x, y: h - element.y - element.height, width: element.width, height: element.height)
+            context.setFillColor(color(element.color)); context.setStrokeColor(color(element.color)); context.setLineWidth(3)
+            switch element.kind {
+            case "image":
+                if let data = element.image, let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+                    let ratio = min(rect.width / Double(image.width), rect.height / Double(image.height))
+                    let width = Double(image.width) * ratio, height = Double(image.height) * ratio
+                    context.draw(image, in: CGRect(x: rect.midX - width / 2, y: rect.midY - height / 2, width: width, height: height))
+                }
+            case "text":
+                let fontName = element.bold ? "Helvetica-Bold" : "Helvetica"
+                let font = CTFontCreateWithName(fontName as CFString, element.fontSize, nil)
+                let string = NSAttributedString(string: element.text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font, NSAttributedString.Key(kCTForegroundColorAttributeName as String): color(element.color)])
+                let setter = CTFramesetterCreateWithAttributedString(string)
+                context.textMatrix = .identity
+                CTFrameDraw(CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), CGPath(rect: rect, transform: nil), nil), context)
+            case "ellipse": context.fillEllipse(in: rect)
+            case "line", "arrow":
+                context.move(to: CGPoint(x: rect.minX + 4, y: rect.midY)); context.addLine(to: CGPoint(x: rect.maxX - 5, y: rect.midY))
+                if element.kind == "arrow" { context.move(to: CGPoint(x: rect.maxX - 18, y: rect.midY + 10)); context.addLine(to: CGPoint(x: rect.maxX - 5, y: rect.midY)); context.addLine(to: CGPoint(x: rect.maxX - 18, y: rect.midY - 10)) }
+                context.strokePath()
+            default: context.addPath(CGPath(roundedRect: rect, cornerWidth: 12, cornerHeight: 12, transform: nil)); context.fillPath()
+            }
+            context.restoreGState()
         }
         for item in page.textObjects {
             let base = CTFontCreateUIFontForLanguage(.system, item.fontSize, nil) ?? CTFontCreateWithName("Helvetica" as CFString, item.fontSize, nil)

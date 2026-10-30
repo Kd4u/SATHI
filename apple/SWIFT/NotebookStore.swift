@@ -117,7 +117,7 @@ import PencilKit
             else { book.pageIDs.append(page.id) }
             try saveBook(book)
         } else if geometryChanged { try saveBook(book) }
-        if let revision = revision(page.id) { pages.setObject(PageBox(page), forKey: (page.id + revision) as NSString, cost: page.drawing.count) }
+        if let revision = revision(page.id) { pages.setObject(PageBox(page), forKey: (page.id + revision) as NSString, cost: page.drawing.count + (page.elements ?? []).reduce(0) { $0 + ($1.image?.count ?? 0) }) }
         return page
     }
     func remember(bookID: String, page: Int, zoom: Double) {
@@ -131,6 +131,14 @@ import PencilKit
     func lastOpened() -> String? { (try? indexes().sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }.first(where: { $0.deletedAt == nil })?.id) ?? nil }
     func removePage(_ id: String, bookID: String) throws {
         guard var book = book(bookID) else { return }; book.pageIDs.removeAll { $0 == id }; book.removedPageIDs.append(id); try saveBook(book)
+    }
+    func insertBlankPage(bookID: String, after index: Int) throws {
+        guard let study, var book = book(bookID) else { throw NotebookFailure.missingPage }
+        let page = NotebookPageDocument(id: UUID().uuidString, notebookID: bookID, paper: book.paper)
+        try study.saveAsset(id: page.id, kind: "notebookPage", title: book.title + " · page", subject: book.subject, semesterID: book.semesterID, data: JSONEncoder().encode(page))
+        book.pageIDs.insert(page.id, at: min(book.pageIDs.count, max(0, index + 1)))
+        book.pageSizes[page.id] = NotebookPageSize(width: page.paper.width, height: page.paper.height)
+        try saveBook(book)
     }
     func duplicatePage(_ id: String, bookID: String) throws {
         var copy = try page(id); copy.id = UUID().uuidString; copy.notebookID = bookID

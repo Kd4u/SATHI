@@ -47,8 +47,9 @@ nonisolated struct NotebookPageDocument: Codable, Equatable, Sendable {
     var paper = PaperConfiguration()
     var drawing = Data()
     var textObjects: [NotebookTextObject] = []
+    var elements: [NotebookCanvasElement]? = nil
     var modifiedAt = Date()
-    var hasContent: Bool { !drawing.isEmpty || textObjects.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
+    var hasContent: Bool { !(elements ?? []).isEmpty || !drawing.isEmpty || textObjects.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
 }
 nonisolated struct NotebookPageSize: Codable, Equatable, Sendable { var width: Double; var height: Double }
 
@@ -96,4 +97,17 @@ nonisolated enum NotebookFailure: LocalizedError {
         case .changedPage: "This page changed elsewhere. Your version was kept as a separate page."
         }
     }
+}
+
+nonisolated struct NotebookCanvasElement: Codable, Equatable, Identifiable, Sendable {
+    var id = UUID().uuidString
+    var kind = "rectangle"
+    var x = 60.0; var y = 80.0
+    var width = 180.0; var height = 100.0
+    var text = "Text"
+    var fontSize = 22.0
+    var bold = false
+    var opacity = 1.0
+    var color = NotebookColor.blue
+    var image: Data? = nil
 }

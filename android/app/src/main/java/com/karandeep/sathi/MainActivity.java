@@ -115,11 +115,13 @@ public class MainActivity extends Activity {
     ink = Color.parseColor(dark ? "#F1F5FB" : "#17253B");
     secondary = Color.parseColor(dark ? "#A7B3C5" : "#64748B");
     String color = store.object("study:preferences").optString("accent", "blue");
-    accent =
-        Color.parseColor(
-            color.equals("purple")
-                ? "#9B7DE8"
-                : color.equals("green") ? "#35A583" : dark ? "#72B9F7" : "#1679C8");
+    String[] accentNames = {"blue", "purple", "green", "teal", "indigo", "pink", "orange", "mint", "cyan", "red", "brown", "yellow"};
+    String[] accentValues = {"#448AFF", "#9B7DE8", "#35A583", "#26A69A", "#7986CB", "#EC7AAB", "#EF9950", "#55BDA5", "#4DB6D1", "#E66B70", "#AE8B75", "#D2AA45"};
+    accent = Color.parseColor(dark ? "#72B9F7" : "#1679C8");
+    for (int i = 0; i < accentNames.length; i++) if (accentNames[i].equals(color)) accent = Color.parseColor(accentValues[i]);
+    if (android.os.Build.VERSION.SDK_INT >= 31 && getSharedPreferences("appearance", 0).getBoolean("systemAccent", true)) {
+      accent = getColor(dark ? android.R.color.system_accent1_200 : android.R.color.system_accent1_500);
+    }
     getWindow().setStatusBarColor(bg);
     getWindow().setNavigationBarColor(bg);
     getWindow()
@@ -260,7 +262,8 @@ public class MainActivity extends Activity {
     }
     LinearLayout nav = row();
     nav.setPadding(dp(6), dp(9), dp(6), dp(9));
-    nav.setBackgroundColor(card);
+    nav.setBackground(shape((card & 0x00FFFFFF) | 0xDD000000, 32));
+    nav.setElevation(dp(10));
     String[] labels = {"Today", "Calendar", "Notebooks", "Progress", "Settings"};
     for (int i = 0; i < labels.length; i++) {
       final int index = i;
@@ -283,7 +286,9 @@ public class MainActivity extends Activity {
           });
       nav.addView(item, new LinearLayout.LayoutParams(0, dp(62), 1));
     }
-    root.addView(nav);
+    LinearLayout.LayoutParams navLayout = new LinearLayout.LayoutParams(-1, -2);
+    navLayout.setMargins(dp(12), dp(4), dp(12), dp(12));
+    root.addView(nav, navLayout);
   }
 
   void onboarding() {
@@ -669,6 +674,10 @@ public class MainActivity extends Activity {
     LinearLayout form = vertical();
     form.setPadding(dp(20), 0, dp(20), 0);
     EditText name = field(form, "Event title", "");
+    Spinner eventType = new Spinner(this);
+    String[] types = {"Quiz", "Guest lecture", "Presentation", "Placement", "Workshop", "Meeting", "Other"};
+    eventType.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, types));
+    form.addView(eventType);
     EditText date = field(form, "Date YYYY-MM-DD", selectedDate.toString());
     EditText start = field(form, "Starts HH:mm", "09:00"),
         end = field(form, "Ends HH:mm", "10:00"),
@@ -702,7 +711,7 @@ public class MainActivity extends Activity {
                                 .put("start", start.getText())
                                 .put("end", end.getText())
                                 .put("title", name.getText())
-                                .put("type", "other")
+                                .put("type", types[eventType.getSelectedItemPosition()])
                                 .put("subject", "")
                                 .put("notes", notes.getText()));
                         dialog.dismiss();
@@ -839,6 +848,7 @@ public class MainActivity extends Activity {
             secondary,
             false));
     action(account, "Sync now", () -> sync(true));
+    action(body, "Student profile", () -> studentProfile());
     LinearLayout appearance = panel(body);
     appearance.addView(text("Appearance", 18, ink, true));
     action(
@@ -864,11 +874,16 @@ public class MainActivity extends Activity {
             new AlertDialog.Builder(this)
                 .setTitle("Accent colour")
                 .setItems(
-                    new String[] {"Blue", "Purple", "Green"},
-                    (d, i) -> preference("accent", new String[] {"blue", "purple", "green"}[i]))
+                    new String[] {"System wallpaper", "Blue", "Purple", "Green", "Teal", "Indigo", "Pink", "Orange", "Mint", "Cyan", "Red", "Brown", "Yellow"},
+                    (d, i) -> {
+                      getSharedPreferences("appearance", 0).edit().putBoolean("systemAccent", i == 0).apply();
+                      if (i > 0) preference("accent", new String[] {"blue", "purple", "green", "teal", "indigo", "pink", "orange", "mint", "cyan", "red", "brown", "yellow"}[i - 1]);
+                      else { render(); }
+                    })
                 .show());
     LinearLayout reminders = panel(body);
     reminders.addView(text("Notifications", 18, ink, true));
+    toggle(reminders, "Fingerprint and sheet crosscheck", "proofCrosscheck", false);
     toggle(reminders, "Class and attendance reminders", "reminders", false);
     toggle(reminders, "Notification sounds", "sounds", true);
     toggle(reminders, "Vibration", "haptics", true);
@@ -982,6 +997,28 @@ public class MainActivity extends Activity {
     }
   }
 
+  void studentProfile() {
+    JSONObject prefs = store.object("study:preferences");
+    int semester = store.object("selection").optInt("semester", 1);
+    LinearLayout form = vertical(); form.setPadding(dp(18), 0, dp(18), 0);
+    EditText name = field(form, "Your name", prefs.optString("studentName", ""));
+    Spinner course = new Spinner(this);
+    String[] courses = {"MBA", "DBM", "DBAI", "HHM"};
+    course.setAdapter(new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, courses));
+    for (int i = 0; i < courses.length; i++) if (courses[i].equals(prefs.optString("programme", "MBA"))) course.setSelection(i);
+    form.addView(course); form.addView(text("Semester " + semester + " · Year " + (semester <= 3 ? "1" : "2"), 13, secondary, false));
+    EditText section = field(form, "Section A, B, C or D", prefs.optString("firstYearSection", ""));
+    if (semester >= 4) section.setVisibility(View.GONE);
+    new AlertDialog.Builder(this).setTitle("Student profile").setView(form).setNegativeButton("Cancel", null)
+      .setPositiveButton("Save", (dialog, which) -> {
+        try {
+          defaults(prefs); prefs.put("studentName", name.getText().toString().trim()).put("programme", courses[course.getSelectedItemPosition()]).put("studentSemester", semester);
+          if (semester <= 3) prefs.put("firstYearSection", section.getText().toString().trim().toUpperCase(Locale.ROOT));
+          store.put("study:preferences", prefs); ScheduleWidget.refresh(this); render();
+        } catch (Exception error) { error(error); }
+      }).show();
+  }
+
   void selection() {
     try {
       JSONObject report = store.object("timetable"), sel = store.object("selection");
@@ -997,6 +1034,7 @@ public class MainActivity extends Activity {
               form,
               "First-year section (A, B, C…)",
               store.object("study:preferences").optString("firstYearSection"));
+      if (sel.optInt("semester", 1) >= 4) section.setVisibility(View.GONE);
       JSONArray selected = sel.optJSONArray("keys");
       Set<String> old = new HashSet<>();
       if (selected != null)

@@ -11,7 +11,7 @@ extension StudyPreferences {
         switch appearanceMode { case "dark": .dark; case "light": .light; default: nil }
     }
     var accentColor: Color {
-        switch accent { case "teal": .teal; case "indigo": .indigo; case "purple": .purple; case "green": .green; default: .blue }
+        switch accent { case "teal": .teal; case "indigo": .indigo; case "purple": .purple; case "green": .green; case "pink": .pink; case "orange": .orange; case "mint": .mint; case "cyan": .cyan; case "red": .red; case "brown": .brown; case "yellow": .yellow; default: .blue }
     }
     var textSize: DynamicTypeSize {
         switch fontScale { case ..<0.95: .medium; case ..<1.05: .large; case ..<1.15: .xLarge; case ..<1.25: .xxLarge; default: .xxxLarge }
@@ -27,15 +27,28 @@ struct AppearanceSetupView: View {
             Text(onboarding ? "Make SATHI yours" : "Appearance & reminders").font(.largeTitle.bold())
             Text("A calm study space, on all your devices.").foregroundStyle(.secondary)
             Form {
+                Section("Themes") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 95))], spacing: 10) {
+                        ForEach(["Ocean", "Forest", "Lavender", "Sunset", "Graphite"], id: \.self) { theme in
+                            Button(theme) {
+                                let accents = ["Ocean": "blue", "Forest": "green", "Lavender": "purple", "Sunset": "orange", "Graphite": "indigo"]
+                                store.workspace.preferences.accent = accents[theme] ?? "blue"
+                                store.workspace.preferences.appearanceMode = theme == "Graphite" ? "dark" : "system"
+                                store.workspace.preferences.glassStyle = theme == "Graphite" ? "solid" : "regular"
+                                store.workspace.preferences.glassOpacity = 0.75
+                            }.buttonStyle(.bordered)
+                        }
+                    }
+                }
                 Section("Appearance") {
                     Picker("Display", selection: Binding(get: { store.workspace.preferences.appearanceMode ?? "system" }, set: { store.workspace.preferences.appearanceMode = $0 })) {
                         Text("System").tag("system"); Text("Light").tag("light"); Text("Dark").tag("dark")
                     }
                     Picker("Material", selection: Binding(get: { store.workspace.preferences.glassStyle ?? "regular" }, set: { store.workspace.preferences.glassStyle = $0 })) {
-                        Text("Glass").tag("regular"); Text("Clear glass").tag("clear"); Text("Solid").tag("solid")
+                        Text("Glass").tag("regular"); Text("Clear glass").tag("clear"); Text("Frosted").tag("frosted"); Text("Ultra-thin").tag("ultraThin"); Text("Solid").tag("solid")
                     }
                     Picker("Accent colour", selection: $store.workspace.preferences.accent) {
-                        ForEach(["blue", "teal", "indigo", "purple", "green"], id: \.self) { Text($0.capitalized).tag($0) }
+                        ForEach(["blue", "teal", "indigo", "purple", "green", "pink", "orange", "mint", "cyan", "red", "brown", "yellow"], id: \.self) { Text($0.capitalized).tag($0) }
                     }
                     Slider(value: $store.workspace.preferences.glassOpacity, in: 0.25...1) { Text("Glass opacity") }
                     Picker("Text size", selection: $store.workspace.preferences.fontScale) {
@@ -56,10 +69,23 @@ struct AppearanceSetupView: View {
                     Stepper("Reminder grace: \(store.workspace.preferences.reminderGraceMinutes) min after", value: $store.workspace.preferences.reminderGraceMinutes, in: 0...20)
                     Stepper("Sheet reminder: \(store.workspace.preferences.sheetReminderMinutes) min into class", value: $store.workspace.preferences.sheetReminderMinutes, in: 5...120, step: 5)
                 }
-                Section("First-year section") {
-                    TextField("Programme", text: $store.workspace.preferences.programme)
-                    TextField("Section (A, B, C…)", text: $store.workspace.preferences.firstYearSection)
-                    Text("Your section is remembered for semesters 1–3. The complete imported workbook is retained.").font(.caption).foregroundStyle(.secondary)
+                Section("Student profile") {
+                    TextField("Your name", text: Binding(get: { store.workspace.preferences.studentName ?? "" }, set: { store.workspace.preferences.studentName = $0 }))
+                    Picker("Course", selection: $store.workspace.preferences.programme) {
+                        ForEach(["MBA", "DBM", "DBAI", "HHM"], id: \.self) { Text($0).tag($0) }
+                    }
+                    if (store.workspace.preferences.studentSemester ?? 4) <= 3 {
+                        Picker("Section", selection: $store.workspace.preferences.firstYearSection) {
+                            Text("Choose section").tag("")
+                            ForEach(["A", "B", "C", "D"], id: \.self) { Text($0).tag($0) }
+                        }
+                    }
+                    Text("Year is determined by your semester. Course and section are remembered.").font(.caption)
+                }
+                Section("Everyday tools") {
+                    Toggle("Fingerprint and attendance-sheet crosscheck", isOn: Binding(get: { store.workspace.preferences.proofCrosscheck ?? false }, set: { store.workspace.preferences.proofCrosscheck = $0 }))
+                    Toggle("Show mess menu and laundry buttons", isOn: Binding(get: { store.workspace.preferences.campusShortcuts ?? false }, set: { store.workspace.preferences.campusShortcuts = $0 }))
+                    Text("Menu and laundry documents stay on this device. Add a photo or PDF and replace it whenever needed.").font(.caption)
                 }
             }.formStyle(.grouped)
             Button(onboarding ? "Continue" : "Save changes") {
@@ -152,6 +178,7 @@ struct SemesterHistoryView: View {
                                     let missed = archive.attendance.values.filter { $0 == "Missed" }.count
                                     Text("\(present) present / OD · \(missed) missed")
                                     ForEach(ScheduleEdits.apply(archive.report.sessions.filter { session in
+                                        if let ids = archive.selectedSessionIDs { return ids.contains(session.id) }
                                         if archive.number >= 4 { return archive.selectedKeys.contains(session.subject + "|" + session.section) }
                                         return (archive.section ?? "").isEmpty || session.section.isEmpty || session.section.uppercased() == archive.section?.uppercased()
                                     }, overrides: archive.overrides ?? [:], semesterID: archive.semesterID)) { session in
@@ -165,6 +192,7 @@ struct SemesterHistoryView: View {
                                     }
                                     Divider()
                                     NotesHubView(store: store, subjects: archive.report.sessions.filter { session in
+                                        if let ids = archive.selectedSessionIDs { return ids.contains(session.id) }
                                         if archive.number >= 4 { return archive.selectedKeys.contains(session.subject + "|" + session.section) }
                                         return (archive.section ?? "").isEmpty || session.section.isEmpty || session.section.uppercased() == archive.section?.uppercased()
                                     }.map(\.subject), semesterID: archive.semesterID)

@@ -13,6 +13,10 @@ nonisolated enum NotebookTool: String, CaseIterable { case pen, marker, eraser, 
     @Published var document: NotebookPageDocument
     @Published var error = ""
     @Published var selectedTextID: String?
+    @Published var selectedCanvasID: String?
+    @Published var inkColor = NotebookColor.ink
+    @Published var inkWidth = 2.0
+    @Published var inkOpacity = 1.0
     @Published var saveState = "Saved locally"
     var undoInk: (() -> Void)?
     var redoInk: (() -> Void)?
@@ -59,13 +63,13 @@ nonisolated enum NotebookTool: String, CaseIterable { case pen, marker, eraser, 
     }
     func checkpoint() { undoText.append(document); if undoText.count > 30 { undoText.removeFirst() }; redoText.removeAll() }
     func undo(tool: NotebookTool) {
-        if tool != .text, let undoInk { undoInk(); return }
-        if tool == .text, undoTyped?() == true { return }
+        if selectedCanvasID == nil && tool != .text, let undoInk { undoInk(); return }
+        if selectedCanvasID == nil && tool == .text, undoTyped?() == true { return }
         guard let old = undoText.popLast() else { return }; redoText.append(document); document = old; scheduleSave()
     }
     func redo(tool: NotebookTool) {
-        if tool != .text, let redoInk { redoInk(); return }
-        if tool == .text, redoTyped?() == true { return }
+        if selectedCanvasID == nil && tool != .text, let redoInk { redoInk(); return }
+        if selectedCanvasID == nil && tool == .text, redoTyped?() == true { return }
         guard let next = redoText.popLast() else { return }; undoText.append(document); document = next; scheduleSave()
     }
     func addText(at point: CGPoint) {
@@ -127,21 +131,21 @@ struct NotebookPencilCanvas: UIViewRepresentable {
     }
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
         context.coordinator.parent = self
-        canvas.drawingPolicy = fingerDrawing ? .anyInput : .pencilOnly
+        canvas.drawingPolicy = (fingerDrawing || tool == .eraser) ? .anyInput : .pencilOnly
         canvas.isUserInteractionEnabled = tool != .text
-        let signature = tool.rawValue + String(model.document.paper.background.isDark)
-        if signature != context.coordinator.toolSignature {
+        let signature = tool.rawValue + String(model.document.paper.background.isDark) + String(describing: model.inkColor) + String(model.inkWidth) + String(model.inkOpacity)
+        if signature != context.coordinator.toolSignature || (tool == .eraser && !(canvas.tool is PKEraserTool)) {
             context.coordinator.toolSignature = signature
-            let ink: UIColor = model.document.paper.background.isDark ? .white : .black
+            let ink: UIColor = (model.document.paper.background.isDark && model.inkColor == .ink ? UIColor.white : UIColor(model.inkColor.color)).withAlphaComponent(model.inkOpacity)
             switch tool {
-            case .pen: canvas.tool = PKInkingTool(.pen, color: ink, width: 2)
-            case .marker: canvas.tool = PKInkingTool(.marker, color: UIColor.systemYellow.withAlphaComponent(0.45), width: 18)
+            case .pen: canvas.tool = PKInkingTool(.pen, color: ink, width: model.inkWidth)
+            case .marker: canvas.tool = PKInkingTool(.marker, color: ink.withAlphaComponent(min(0.6, model.inkOpacity)), width: max(8, model.inkWidth * 5))
             case .eraser: canvas.tool = PKEraserTool(.vector)
             case .selection: canvas.tool = PKLassoTool()
             case .text: break
             }
         }
-        if focused && tool != .text && canvas.window != nil {
+        if focused && (tool == .pen || tool == .marker) && canvas.window != nil {
             context.coordinator.picker.addObserver(canvas)
             context.coordinator.picker.setVisible(true, forFirstResponder: canvas)
             if !canvas.isFirstResponder { canvas.becomeFirstResponder() }
@@ -169,7 +173,7 @@ struct NotebookPencilCanvas: UIViewRepresentable {
         var toolSignature = ""
         init(_ parent: NotebookPencilCanvas) { self.parent = parent; lastData = parent.model.document.drawing }
         func attach() {
-            guard let canvas, parent.focused, parent.tool != .text else { return }
+            guard let canvas, parent.focused, parent.tool == .pen || parent.tool == .marker else { return }
             picker.addObserver(canvas); picker.setVisible(true, forFirstResponder: canvas); canvas.becomeFirstResponder()
         }
         func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) { isDrawing = true; strokeCount = canvasView.drawing.strokes.count; parent.onActivate() }

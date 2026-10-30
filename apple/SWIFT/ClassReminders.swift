@@ -73,7 +73,7 @@ final class ClassReminders: NSObject, UNUserNotificationCenterDelegate {
         guard !Task.isCancelled else { return }
         currentAccountID = accountID
         let classes = WidgetDates.horizon(windows.map {
-            WidgetClass(id: $0.id, subject: $0.subject, start: $0.start, end: $0.end, fingerprintTarget: $0.fingerprintTarget(preferences: preferences), proxyWarning: AttendanceRules.hasLiveProxyWarning(proof: proofs[$0.id], window: $0, now: Date()))
+            WidgetClass(id: $0.id, subject: $0.subject, start: $0.start, end: $0.end, fingerprintTarget: $0.fingerprintTarget(preferences: preferences), proxyWarning: preferences.proofCrosscheck == true && AttendanceRules.hasLiveProxyWarning(proof: proofs[$0.id], window: $0, now: Date()))
         } + events, from: Date())
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

@@ -37,6 +37,13 @@ nonisolated enum EventPresentation {
         }
         return result.sorted { ($0.date, $0.time, $0.title) < ($1.date, $1.time, $1.title) }
     }
+    static func applyingOverrides(_ events: [SATHICommandEvent], overrides: [String: ScheduleOverride], semesterID: String) -> [SATHICommandEvent] {
+        consolidate(events).compactMap { event in
+            guard let edit = overrides[event.id], edit.semesterID == semesterID else { return event }
+            guard !edit.cancelled else { return nil }
+            return SATHICommandEvent(id: event.id, date: edit.date, title: edit.title.isEmpty ? event.title : edit.title, time: edit.start + " – " + edit.end)
+        }.sorted { ($0.date, $0.time, $0.id) < ($1.date, $1.time, $1.id) }
+    }
     static func widgetRows(_ events: [SATHICommandEvent]) -> [WidgetClass] {
         consolidate(events).compactMap { event in
             let allDay = event.time == "All day"

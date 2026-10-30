@@ -30,6 +30,9 @@ struct ContentView: View {
     @State private var selectedKeys: Set<String> = []
     @State private var page: Page = .welcome
     @State private var showImporter = false
+    @State private var showManualReview = false
+    @State private var showWholeSchedule = false
+    @State private var additionalProgramme: String?
     @State private var importing = false
     @State private var notice = ""
     @State private var query = ""
@@ -57,7 +60,9 @@ struct ContentView: View {
         (report?.sessions ?? []).filter { TimetableIdentity.programme(source: $0.source) == study.workspace.preferences.programme }
     }
     private var subjects: [TimetableSubject] { TimetableIdentity.subjects(programmeSessions) }
+    private var manualIDs: Set<String>? { (study.workspace.preferences.manualSelections?[study.workspace.currentSemesterID]).map { Set($0) } }
     private var activeSubjects: [TimetableSubject] {
+        if let manualIDs { return TimetableIdentity.subjects((report?.sessions ?? []).filter { manualIDs.contains($0.id) }) }
         if isSecondYear { return subjects.filter { selectedKeys.contains($0.key) } }
         let section = study.workspace.preferences.firstYearSection.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         return subjects.filter { item in
@@ -67,7 +72,8 @@ struct ContentView: View {
     }
     private var credits: Double { activeSubjects.reduce(0) { $0 + $1.credits } }
     private var sessions: [TimetableSession] {
-        let scoped = programmeSessions.filter { session in
+        let scoped = (manualIDs == nil ? programmeSessions : (report?.sessions ?? [])).filter { session in
+            if let manualIDs { return manualIDs.contains(session.id) }
             if isSecondYear { return selectedKeys.contains(session.subject + "|" + session.section) }
             let section = study.workspace.preferences.firstYearSection.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             return section.isEmpty || session.section.isEmpty || session.section.uppercased() == section
@@ -75,8 +81,23 @@ struct ContentView: View {
             .sorted { ($0.date, $0.time, $0.subject) < ($1.date, $1.time, $1.subject) }
         return ScheduleEdits.apply(scoped, overrides: study.workspace.overrides, semesterID: study.workspace.currentSemesterID)
     }
+    private var lectureOrdinals: [String: Int] {
+        let chosen = Set(sessions.map(\.id))
+        let grouped = Dictionary(grouping: (report?.sessions ?? []).filter { chosen.contains($0.id) }) { $0.subject + "|" + $0.section }
+        var result: [String: Int] = [:]
+        for values in grouped.values {
+            for (index, row) in values.sorted(by: { ($0.date, $0.time, $0.id) < ($1.date, $1.time, $1.id) }).enumerated() { result[row.id] = index + 1 }
+        }
+        return result
+    }
     private var events: [TimetableEvent] {
-        (report?.events ?? []).filter { event in
+        (report?.events ?? []).map { event in
+            let id = event.id ?? "excel-" + event.source + "-" + event.time
+            if let edit = study.workspace.overrides[id], edit.semesterID == study.workspace.currentSemesterID {
+                return TimetableEvent(date: edit.date, time: edit.start + " – " + edit.end, title: edit.title, source: event.source, id: id)
+            }
+            return event
+        }.filter { event in
             guard TimetableIdentity.programme(source: event.source) == study.workspace.preferences.programme else { return false }
             let section = TimetableSection.label(in: event.source.components(separatedBy: "!")[0])
             let chosen = study.workspace.preferences.firstYearSection
@@ -217,6 +238,29 @@ struct ContentView: View {
             if !signedIn { showSync = false; Task { await ClassReminders.shared.clear() } }
         }
         .sheet(isPresented: $showAppearance) { AppearanceSetupView(store: study) { saveStudy(); showAppearance = false } }
+        .sheet(isPresented: $showManualReview) {
+            if let report {
+                TimetableReviewView(report: report, initialSelection: Set(sessions.map(\.id)), readOnly: false) { updated, chosen in
+                    do {
+                        let backup = storageDirectory.appendingPathComponent("ManualReview-" + UUID().uuidString, isDirectory: true)
+                        try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+                        try JSONEncoder().encode(report).write(to: backup.appendingPathComponent("timetable.json"), options: .atomic)
+                        try JSONEncoder().encode(updated).write(to: storageDirectory.appendingPathComponent("timetable.json"), options: .atomic)
+                        let oldByID = Dictionary(report.sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                        for row in updated.sessions {
+                            if let old = oldByID[row.id], old.date != row.date || old.time != row.time || old.subject != row.subject { study.workspace.overrides.removeValue(forKey: row.id) }
+                        }
+                        self.report = updated
+                        if study.workspace.preferences.manualSelections == nil { study.workspace.preferences.manualSelections = [:] }
+                        study.workspace.preferences.manualSelections?[study.workspace.currentSemesterID] = chosen.sorted()
+                        try study.saveWorkspace(); persist(); showManualReview = false
+                    } catch { notice = error.localizedDescription }
+                }
+            }
+        }
+        .sheet(isPresented: $showWholeSchedule) {
+            if let report { TimetableReviewView(report: report, initialSelection: Set(sessions.map(\.id)), readOnly: true, onRequestSchedule: { course in additionalProgramme = course; showWholeSchedule = false; showImporter = true }, onSave: { _, _ in }) }
+        }
         .sheet(isPresented: $showHistory) { SemesterHistoryView(store: study) }
         .sheet(isPresented: Binding(get: { attendanceWindow != nil }, set: { if !$0 { attendanceWindow = nil } })) {
             if let window = attendanceWindow {
@@ -247,7 +291,7 @@ struct ContentView: View {
                       allowsMultipleSelection: false) { result in
             switch result {
             case .success(let urls): if let url = urls.first { importExcel(url) }
-            case .failure(let error): notice = error.localizedDescription
+            case .failure(let error): additionalProgramme = nil; nextSemesterImport = false; notice = error.localizedDescription
             }
         }
         .fileExporter(isPresented: $showExport, document: exportDocument,
@@ -320,8 +364,8 @@ struct ContentView: View {
                         .font(.title3.bold())
                     Text("Choose your Excel (.xlsx) file. SATHI will organize the schedule for you.")
                         .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    Button { showImporter = true } label: {
-                        Label(importing ? "Reading timetable…" : "Import timetable", systemImage: "arrow.up.doc")
+                    Button { page = .semester } label: {
+                        Label(importing ? "Reading timetable…" : "Set up my timetable", systemImage: "arrow.up.doc")
                             .frame(maxWidth: .infinity).padding(.vertical, 5)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.large).disabled(importing)
@@ -348,6 +392,7 @@ struct ContentView: View {
                 ForEach(1...6, id: \.self) { number in
                     Button {
                         semester = number
+                        study.workspace.preferences.studentSemester = number
                         persist()
                     } label: {
                         HStack {
@@ -367,7 +412,7 @@ struct ContentView: View {
                 }
             }
             Picker("Programme", selection: $study.workspace.preferences.programme) {
-                ForEach(Array(Set((report?.sessions ?? []).map { TimetableIdentity.programme(source: $0.source) })).sorted(), id: \.self) { Text($0).tag($0) }
+                ForEach(["MBA", "DBM", "DBAI", "HHM"], id: \.self) { Text($0).tag($0) }
             }
             .onChange(of: study.workspace.preferences.programme) { _, _ in
                 selectedKeys = []
@@ -376,15 +421,16 @@ struct ContentView: View {
             }
             if let semester, semester <= 3 {
                 Text("All first-year subjects are included. Choose your section once; it is remembered through semester 3.").font(.subheadline)
-                if !sectionLabels.isEmpty {
+                if study.workspace.preferences.programme == "MBA" || !sectionLabels.isEmpty {
                     Picker("Your section", selection: $study.workspace.preferences.firstYearSection) {
                         Text("Choose section").tag("")
-                        ForEach(sectionLabels, id: \.self) { Text("Section " + $0).tag($0) }
+                        ForEach(sectionLabels.isEmpty ? ["A", "B", "C", "D"] : sectionLabels, id: \.self) { Text("Section " + $0).tag($0) }
                     }
                 }
             }
             Button {
                 guard let semester else { return }
+                if report == nil { showImporter = true; return }
                 if semester <= 3 {
                     page = .overview
                 } else {
@@ -396,7 +442,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity).padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent).controlSize(.large)
-            .disabled(semester == nil || ((semester ?? 0) <= 3 && sectionLabels.count > 1 && study.workspace.preferences.firstYearSection.isEmpty))
+            .disabled(semester == nil || ((semester ?? 0) <= 3 && (sectionLabels.count > 1 || (report == nil && study.workspace.preferences.programme == "MBA")) && study.workspace.preferences.firstYearSection.isEmpty))
             Button("Choose a different Excel file") { showImporter = true }
                 .font(.subheadline)
         }
@@ -472,6 +518,8 @@ struct ContentView: View {
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
             Text("Semester \(semester ?? 1) · \(activeSubjects.count) subjects")
                 .foregroundStyle(.secondary)
+            Button("Check or correct my timetable", systemImage: "tablecells.badge.ellipsis") { showManualReview = true }
+            Text("Recommended if a subject, class count or time looks wrong. Your predicted classes start selected.").font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 statistic("Total credits", creditText(credits))
                 statistic("Classes", "\(sessions.count)")
@@ -547,7 +595,10 @@ struct ContentView: View {
                 } else if var proof = study.workspace.proofs[id], proof.officialDuty {
                     proof.officialDuty = false; study.workspace.proofs[id] = proof
                 }
-                if status == nil { attendance.removeValue(forKey: id) }
+                if status == "Attended" || status == "Missed" {
+                    var proof = study.workspace.proofs[id] ?? .init(); proof.attended = status == "Attended"; proof.updatedAt = Date(); study.workspace.proofs[id] = proof
+                }
+                if status == nil { attendance.removeValue(forKey: id); study.workspace.proofs.removeValue(forKey: id) }
                 saveExtras()
             },
             onAddEvent: { showAddEvent = true },
@@ -572,7 +623,14 @@ struct ContentView: View {
             onHistory: { showHistory = true },
             onNextSemester: { nextSemesterImport = true; showImporter = true },
             canStartNextSemester: canStartNextSemester,
-            canEditSelection: isSecondYear
+            canEditSelection: isSecondYear,
+            onManualReview: { showManualReview = true },
+            onWholeSchedule: { showWholeSchedule = true },
+            customEvents: customEvents,
+            onEditCustom: { updated in
+                if let index = customEvents.firstIndex(where: { $0.id == updated.id }) { customEvents[index] = updated; saveExtras() }
+            },
+            lectureOrdinals: lectureOrdinals
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -818,6 +876,7 @@ struct ContentView: View {
         customEvents = newEvents
         page = newPage
         study.workspace = incomingWorkspace
+        study.workspace.preferences.studentSemester = semester
         observedSnapshot = snapshot
     }
 
@@ -940,6 +999,7 @@ struct ContentView: View {
            let prefs = try? JSONDecoder().decode(Preferences.self, from: data) {
             minimumAttendance = prefs.minimumAttendance ?? 80
             semester = prefs.semester
+            study.workspace.preferences.studentSemester = semester
             selectedKeys = Set(prefs.keys).intersection(Set(saved.subjects.map(\.key)))
             page = Page(rawValue: prefs.page) ?? .semester
             if page == .welcome { page = .semester }
@@ -1009,6 +1069,27 @@ struct ContentView: View {
                         } catch { notice = "Could not repair the saved import: \(error.localizedDescription)" }
                         return
                     }
+                    if let course = additionalProgramme, let existing = report {
+                        do {
+                            let matching = parsed.sessions.filter { TimetableIdentity.programme(source: $0.source) == course }
+                            let incoming = (matching.isEmpty ? parsed.sessions : matching).map { row in
+                                TimetableSession(id: course + "-" + row.id, date: row.date, day: row.day, time: row.time, subject: row.subject, section: row.section, teacher: row.teacher, source: course + " / " + row.source)
+                            }
+                            var identities = Set(existing.sessions.map { $0.date + "|" + $0.time + "|" + $0.subject + "|" + $0.section + "|" + TimetableIdentity.programme(source: $0.source) })
+                            let added = incoming.filter { identities.insert($0.date + "|" + $0.time + "|" + $0.subject + "|" + $0.section + "|" + course).inserted }
+                            let all = existing.sessions + added
+                            let moreEvents = parsed.events.filter { matching.isEmpty || TimetableIdentity.programme(source: $0.source) == course }.map { TimetableEvent(date: $0.date, time: $0.time, title: $0.title, source: course + " / " + $0.source) }
+                            let merged = TimetableReport(workbook: existing.workbook, sessions: all, subjects: TimetableIdentity.subjects(all), events: existing.events + moreEvents, warnings: existing.warnings + parsed.warnings)
+                            let backup = storageDirectory.appendingPathComponent("AdditionalSchedule-" + UUID().uuidString, isDirectory: true)
+                            try FileManager.default.createDirectory(at: backup, withIntermediateDirectories: true)
+                            try JSONEncoder().encode(existing).write(to: backup.appendingPathComponent("timetable.json"), options: .atomic)
+                            try JSONEncoder().encode(merged).write(to: storageDirectory.appendingPathComponent("timetable.json"), options: .atomic)
+                            report = merged; additionalProgramme = nil; persist(); showWholeSchedule = true
+                            notice = "Added the \(course) schedule. Your own timetable and attendance were retained."
+                        } catch { notice = error.localizedDescription }
+                        return
+                    }
+                    let firstSetup = report == nil
                     let previousSemester = semester
                     do { try archiveCurrentSemester() }
                     catch { notice = "Could not preserve the previous semester: \(error.localizedDescription)"; return }
@@ -1023,8 +1104,9 @@ struct ContentView: View {
                     study.workspace.proofs = [:]
                     study.workspace.overrides = [:]
                     study.workspace.currentSemesterID = UUID().uuidString
-                    semester = nextSemesterImport ? (previousSemester ?? 0) + 1 : nil
+                    semester = nextSemesterImport ? (previousSemester ?? 0) + 1 : (firstSetup ? previousSemester : nil)
                     nextSemesterImport = false
+                    study.workspace.preferences.studentSemester = semester
                     saveExtras()
                     page = semester == nil ? .semester : ((semester ?? 0) <= 3 ? .overview : .subjects)
                     selectedDate = Date()
@@ -1055,9 +1137,9 @@ struct ContentView: View {
             guard !Task.isCancelled, cloud.accountID == uid else { return }
             cachedWindows = parsed.sorted { $0.start < $1.start }; endDates = Dictionary(parsed.map { ($0.id, $0.end) }, uniquingKeysWith: { _, last in last }); windowSignature = signature
         }
-        await ClassReminders.shared.publish(windows: classWindows, preferences: study.workspace.preferences, proofs: study.workspace.proofs, accountID: uid, events: EventPresentation.widgetRows(
-            events.map { SATHICommandEvent(id: "excel-" + $0.source + "-" + $0.time, date: $0.date, title: $0.title, time: $0.time) } + customEvents.map { SATHICommandEvent(id: "custom-" + $0.id.uuidString, date: $0.date, title: $0.title, time: $0.start + " – " + $0.end) }
-        ))
+        await ClassReminders.shared.publish(windows: classWindows, preferences: study.workspace.preferences, proofs: study.workspace.proofs, accountID: uid, events: EventPresentation.widgetRows(EventPresentation.applyingOverrides(
+            events.map { SATHICommandEvent(id: $0.id ?? "excel-" + $0.source + "-" + $0.time, date: $0.date, title: $0.title, time: $0.time) } + customEvents.map { SATHICommandEvent(id: "custom-" + $0.id.uuidString, date: $0.date, title: $0.title, time: $0.start + " – " + $0.end) }, overrides: study.workspace.overrides, semesterID: study.workspace.currentSemesterID
+        )))
         guard !Task.isCancelled, cloud.accountID == uid, loadedAccountID == uid else { return }
         await ClassReminders.shared.schedule(windows: classWindows, preferences: study.workspace.preferences, accountID: uid, proofs: study.workspace.proofs)
         surfaceStatus = ClassReminders.shared.status
@@ -1083,11 +1165,12 @@ struct ContentView: View {
     private var classWindows: [ClassWindow] {
         cachedWindows
     }
-    private var penaltyIDs: Set<String> { AttendanceRules.penaltyIDs(windows: classWindows, proofs: study.workspace.proofs, now: clockNow) }
+    private var penaltyIDs: Set<String> { study.workspace.preferences.proofCrosscheck == true ? AttendanceRules.penaltyIDs(windows: classWindows, proofs: study.workspace.proofs, now: clockNow) : [] }
     private var effectiveAttendance: [String: String] {
-        AttendanceRules.effective(windows: classWindows, proofs: study.workspace.proofs, recorded: attendance, now: clockNow)
+        if study.workspace.preferences.proofCrosscheck != true { return AttendanceRules.simple(proofs: study.workspace.proofs, recorded: attendance) }
+        return AttendanceRules.effective(windows: classWindows, proofs: study.workspace.proofs, recorded: attendance, now: clockNow)
     }
-    private var canStartNextSemester: Bool { !sessions.isEmpty && (sessions.map(\.date).max() ?? "9999") < dateString(Date()) }
+    private var canStartNextSemester: Bool { !sessions.isEmpty && ((sessions.map(\.date).max() ?? "9999") < dateString(Date())) && ((events.filter { $0.title.lowercased().contains("exam") }.map(\.date).max() ?? "0000") < dateString(Date())) }
     private func saveStudy() {
         guard hasRestored, loadedAccountID == cloud.accountID else { return }
         do { try study.saveWorkspace(); try recordSavedChanges() }
@@ -1096,9 +1179,8 @@ struct ContentView: View {
     private func archiveCurrentSemester() throws {
         guard let report else { return }
         let term = study.workspace.currentSemesterID.isEmpty ? UUID().uuidString : study.workspace.currentSemesterID
-        let archiveReport = TimetableReport(workbook: report.workbook, sessions: programmeSessions, subjects: subjects,
-            events: (report.events).filter { TimetableIdentity.programme(source: $0.source) == study.workspace.preferences.programme }, warnings: report.warnings)
-        let archive = ArchivedSemester(report: archiveReport, number: semester ?? 0, selectedKeys: selectedKeys.sorted(), attendance: effectiveAttendance, proofRecords: study.workspace.proofs, overrides: study.workspace.overrides, semesterID: term, section: study.workspace.preferences.firstYearSection, customEvents: customEvents, minimumAttendance: minimumAttendance)
+        let archiveReport = report
+        let archive = ArchivedSemester(report: archiveReport, number: semester ?? 0, selectedKeys: selectedKeys.sorted(), attendance: effectiveAttendance, proofRecords: study.workspace.proofs, overrides: study.workspace.overrides, semesterID: term, section: study.workspace.preferences.firstYearSection, customEvents: customEvents, minimumAttendance: minimumAttendance, selectedSessionIDs: sessions.map(\.id))
         try study.saveAsset(id: "semester-" + term, kind: "semester", title: "Semester \(semester ?? 0) · \(report.workbook)", subject: "", semesterID: term, data: JSONEncoder().encode(archive))
     }
 
@@ -1161,7 +1243,7 @@ private struct SATHIEventEditor: View {
             Form {
                 Section("Event") {
                     Picker("Type", selection: $type) {
-                        ForEach(["Quiz", "Guest lecture", "Presentation", "Other"], id: \.self) { Text($0) }
+                        ForEach(["Quiz", "Guest lecture", "Presentation", "Placement", "Workshop", "Meeting", "Other"], id: \.self) { Text($0) }
                     }
                     TextField("Event title", text: $title)
                     Picker("Subject (optional)", selection: $subject) {

@@ -34,6 +34,11 @@ struct SATHICommandCenter: View {
     let onNextSemester: () -> Void
     let canStartNextSemester: Bool
     let canEditSelection: Bool
+    let onManualReview: () -> Void
+    let onWholeSchedule: () -> Void
+    let customEvents: [SATHICustomEvent]
+    let onEditCustom: (SATHICustomEvent) -> Void
+    let lectureOrdinals: [String: Int]
 
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -43,6 +48,12 @@ struct SATHICommandCenter: View {
     @State private var daysToShow = 7
     @State private var showUpcoming = false
     @State private var showAttendanceReview = false
+    @State private var editingSession: TimetableSession?
+    @State private var editingEvent: SATHICustomEvent?
+    @State private var editingImported: SATHICommandEvent?
+    @State private var calendarWeek = true
+    @State private var campusDocument: String?
+    @State private var selectedSubject: TimetableSubject?
 
     private var accent: Color { .accentColor }
     private var isCompact: Bool { sizeClass == .compact }
@@ -52,6 +63,32 @@ struct SATHICommandCenter: View {
     }
 
     var body: some View {
+        platformBody
+            .sheet(item: $editingSession) { item in
+                ScheduleItemEditor(title: item.subject, date: item.date, time: item.time) { title, day, start, end in
+                    study.workspace.overrides[item.id] = ScheduleOverride(id: item.id, date: day, start: start, end: end, title: title, semesterID: study.workspace.currentSemesterID)
+                    try? study.saveWorkspace(); editingSession = nil
+                }
+            }
+            .sheet(isPresented: Binding(get: { editingImported != nil }, set: { if !$0 { editingImported = nil } })) {
+                if let item = editingImported { ScheduleItemEditor(title: item.title, date: item.date, time: item.time) { title, day, start, end in
+                    study.workspace.overrides[item.id] = ScheduleOverride(id: item.id, date: day, start: start, end: end, title: title, semesterID: study.workspace.currentSemesterID)
+                    try? study.saveWorkspace(); editingImported = nil
+                } }
+            }
+            .sheet(item: $editingEvent) { item in
+                ScheduleItemEditor(title: item.title, date: item.date, time: item.start + " – " + item.end) { title, day, start, end in
+                    var value = item; value.title = title; value.date = day; value.start = start; value.end = end; onEditCustom(value); editingEvent = nil
+                }
+            }
+            .sheet(isPresented: Binding(get: { campusDocument != nil }, set: { if !$0 { campusDocument = nil } })) {
+                if let kind = campusDocument { CampusDocumentView(study: study, kind: kind) }
+            }
+            .sheet(isPresented: Binding(get: { selectedSubject != nil }, set: { if !$0 { selectedSubject = nil } })) {
+                if let subject = selectedSubject { subjectLectureSheet(subject) }
+            }
+    }
+    @ViewBuilder private var platformBody: some View {
         #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone { phoneBody }
         else { wideBody }
@@ -93,7 +130,7 @@ struct SATHICommandCenter: View {
 
     @ViewBuilder private func pageContent(_ item: SATHIPage) -> some View {
         switch item {
-        case .today: VStack(alignment: .leading, spacing: 20) { ClassCountdownView(windows: windows, preferences: study.workspace.preferences); todayPage }
+        case .today: todayPage
         case .calendar: calendarPage
         case .glimpses: glimpsePage(all: false)
         case .allGlimpses: glimpsePage(all: true)
@@ -143,6 +180,13 @@ struct SATHICommandCenter: View {
         VStack(alignment: .leading, spacing: 20) {
             dateNavigation
             todayHero
+            if study.workspace.preferences.campusShortcuts == true {
+                HStack {
+                    Button("Mess menu", systemImage: "fork.knife") { campusDocument = "menu" }
+                    Button("Laundry", systemImage: "washer") { campusDocument = "laundry" }
+                }.buttonStyle(.bordered)
+            }
+            if canStartNextSemester { Button("Add next semester timetable", systemImage: "calendar.badge.plus", action: onNextSemester).buttonStyle(.borderedProminent) }
             if !isMarkerOnlyDay {
             HStack {
                 sectionHeading("Day schedule", detail: "Classes and campus events")
@@ -211,33 +255,24 @@ struct SATHICommandCenter: View {
         let color = accent
         let title = exam ? "All the best!" : holiday ? "Enjoy the holiday" : weekend && free ? "Weekend mode" : free && otherSectionHasClass ? "Lucky free day" : free ? "A little breathing room" : "Make today count"
         let symbol = exam ? "pencil.and.list.clipboard" : holiday ? "party.popper.fill" : weekend && free ? "sun.max.fill" : free ? "leaf.fill" : "sparkles"
-        return ZStack {
-            RoundedRectangle(cornerRadius: 25).fill(color.opacity(0.11))
-            VStack(spacing: 13) {
-                Image(systemName: symbol).font(.system(size: 33, weight: .light)).foregroundStyle(color)
-                Text(title).font(.system(.title, design: .rounded, weight: .bold)).multilineTextAlignment(.center)
-                if free {
-                    if let next {
-                        Text("Your next scheduled day has \(next.count) \(next.count == 1 ? "class" : "classes") on \(next.date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))).")
-                            .multilineTextAlignment(.center).foregroundStyle(.secondary)
-                    } else { Text("No more classes found in your imported timetable.").multilineTextAlignment(.center).foregroundStyle(.secondary) }
-                } else {
-                    Text(exam ? "You've got this. Check the schedule below." : "\(todays.count) scheduled \(todays.count == 1 ? "class" : "classes") today")
-                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                if holiday || exam {
-                    Text(Array(Set(todaysEvents.map(\.title))).sorted().joined(separator: " · "))
-                        .font(.caption).multilineTextAlignment(.center).foregroundStyle(color)
-                }
-            }.padding(.horizontal, 18).padding(.vertical, isCompact ? 20 : 38).frame(maxWidth: .infinity)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 25).strokeBorder(color.opacity(0.20)))
+        return HStack(spacing: 13) {
+            Image(systemName: symbol).font(.title2).foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(free ? (next.map { "Next: " + $0.date.formatted(.dateTime.weekday().day().month(.abbreviated)) } ?? "No further classes in this timetable") : "\(todays.count) classes · \(todaysEvents.count) activities")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(action: onWholeSchedule) { Image(systemName: "tablecells") }.accessibilityLabel("Whole timetable")
+        }.padding(16).background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
     }
 
     private var calendarPage: some View {
         VStack(alignment: .leading, spacing: 20) {
-            sectionHeading("Calendar", detail: "Designed for every screen size")
-            calendarCard
+            sectionHeading("Calendar", detail: "Your classes and activities")
+            HStack { Button("Whole timetable", systemImage: "tablecells", action: onWholeSchedule); Spacer(); Button("Past semesters", systemImage: "clock.arrow.circlepath", action: onHistory) }
+            Picker("Calendar view", selection: $calendarWeek) { Text("Week").tag(true); Text("Month").tag(false) }.pickerStyle(.segmented).frame(maxWidth: 260)
+            if calendarWeek { calendarWeekStrip } else { calendarCard.frame(maxWidth: isCompact ? .infinity : 560).frame(maxWidth: .infinity) }
             sectionHeading("Selected day", detail: selectedDate.formatted(date: .complete, time: .omitted))
             if sessionsOn(selectedDate).isEmpty && eventsOn(selectedDate).isEmpty { todayHero }
             ForEach(sessionsOn(selectedDate)) { classRow($0, planning: false) }
@@ -245,6 +280,25 @@ struct SATHICommandCenter: View {
         }
     }
 
+    private var calendarWeekStrip: some View {
+        let start = Calendar.current.dateInterval(of: .weekOfYear, for: selectedDate)?.start ?? selectedDate
+        return VStack(spacing: 12) {
+            dateNavigation
+            HStack(spacing: 5) {
+                ForEach(0..<7) { offset in
+                    let day = Calendar.current.date(byAdding: .day, value: offset, to: start) ?? start
+                    Button { selectedDate = day; month = day } label: {
+                        VStack(spacing: 8) {
+                            Text(day.formatted(.dateTime.weekday(.narrow))).font(.caption)
+                            Text(day.formatted(.dateTime.day())).font(.headline)
+                            Text("\(sessionsOn(day).count + eventsOn(day).count)").font(.caption2).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Calendar.current.isDate(day, inSameDayAs: selectedDate) ? accent.opacity(0.18) : Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 14))
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+    }
     private var calendarCard: some View {
         let calendar = Calendar.current
         let first = calendar.date(from: calendar.dateComponents([.year, .month], from: month)) ?? month
@@ -349,23 +403,32 @@ struct SATHICommandCenter: View {
 
     private func classRow(_ session: TimetableSession, planning: Bool) -> some View {
         let status = attendance[session.id]
-        let future = session.date >= todayKey
+        let future = ClassWindow.make(id: session.id, subject: session.subject, date: session.date, time: session.time).map { $0.start > Date() } ?? (session.date > todayKey)
         return HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 3).fill(accent).frame(width: 4)
             VStack(alignment: .leading, spacing: 7) {
-                Text(session.subject).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Text("\(lectureNumber(session)). \(session.subject)").font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 Label(session.time, systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+                if study.workspace.preferences.classCountdown, let window = windows.first(where: { $0.id == session.id }), window.start <= Date(), window.end > Date() {
+                    HStack { Text("Class ends in"); Text(timerInterval: window.start...window.end, countsDown: true).monospacedDigit() }.font(.caption).foregroundStyle(accent)
+                }
                 if !session.teacher.isEmpty { Label(session.teacher, systemImage: "person").font(.caption).foregroundStyle(.secondary) }
                 if !session.section.isEmpty { Text("Section \(session.section)").font(.caption2).foregroundStyle(.secondary) }
                 if penaltyIDs.contains(session.id) { Label("No attendance credit · must attend", systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.red) }
-                if let window = windows.first(where: { $0.id == session.id }), AttendanceRules.hasLiveProxyWarning(proof: study.workspace.proofs[session.id], window: window, now: Date()) {
+                if study.workspace.preferences.proofCrosscheck == true, let window = windows.first(where: { $0.id == session.id }), AttendanceRules.hasLiveProxyWarning(proof: study.workspace.proofs[session.id], window: window, now: Date()) {
                     Text("Do not sign: fingerprint was missed").font(.caption.bold()).foregroundStyle(.red)
                 }
-                Button("Fingerprint & sheet", systemImage: "checklist") { onProof(session.id) }.font(.caption)
+                if study.workspace.preferences.proofCrosscheck == true {
+                    HStack(spacing: 14) {
+                        quickProof(session.id, keyPath: \.fingerprint, symbol: "touchid", title: "Fingerprint")
+                        quickProof(session.id, keyPath: \.signedSheet, symbol: "signature", title: "Attendance sheet")
+                    }
+                }
             }
             Spacer(minLength: 4)
             Menu {
-                Button("Fingerprint & sheet") { onProof(session.id) }
+                if study.workspace.preferences.proofCrosscheck == true { Button("Fingerprint & sheet") { onProof(session.id) } }
+                Button("Reschedule: earlier, later or custom", systemImage: "calendar.badge.clock") { editingSession = session }
                 if future {
                     Button("Planning to attend", systemImage: "checkmark.circle") { onAttendanceChange(session.id, "Planning to attend") }
                     Button("Planning to miss", systemImage: "calendar.badge.minus") { onAttendanceChange(session.id, "Planning to miss") }
@@ -397,9 +460,24 @@ struct SATHICommandCenter: View {
                 Text(event.time).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            Menu {
+                Button("Attended") { onAttendanceChange(event.id, "Attended") }
+                Button("Missed") { onAttendanceChange(event.id, "Missed") }
+                Button("Official duty (OD)") { onAttendanceChange(event.id, "OD") }
+                Button("Clear status") { onAttendanceChange(event.id, nil) }
+                Button("Reschedule") {
+                    if event.id.hasPrefix("custom-") { editingEvent = customEvents.first { "custom-" + $0.id.uuidString == event.id } }
+                    else { editingImported = event }
+                }
+            } label: { Label(attendance[event.id] ?? "Mark", systemImage: "ellipsis.circle") }.font(.caption)
         }.padding(14).sathiCard()
             .contextMenu {
+                Button("Attended") { onAttendanceChange(event.id, "Attended") }
+                Button("Missed") { onAttendanceChange(event.id, "Missed") }
+                Button("Official duty (OD)") { onAttendanceChange(event.id, "OD") }
+                Button("Clear status") { onAttendanceChange(event.id, nil) }
                 if event.id.hasPrefix("custom-") {
+                    Button("Reschedule: earlier, later or custom") { editingEvent = customEvents.first { "custom-" + $0.id.uuidString == event.id } }
                     Button("Delete event", role: .destructive) {
                         onDeleteCustomEvent(String(event.id.dropFirst("custom-".count)))
                     }
@@ -422,7 +500,7 @@ struct SATHICommandCenter: View {
             HStack {
                 Text("Semester overview").font(.title2.bold())
                 Spacer()
-                Button(action: onHistory) { Image(systemName: "clock.arrow.circlepath") }.accessibilityLabel("Semester history")
+                Button("Past semesters", systemImage: "clock.arrow.circlepath", action: onHistory).accessibilityLabel("Semester history")
             }
             VStack(alignment: .leading, spacing: 12) {
                 Label("Recorded attendance", systemImage: "checkmark.seal").font(.subheadline).foregroundStyle(accent)
@@ -488,7 +566,7 @@ struct SATHICommandCenter: View {
         let remainingBudget = max(0, maxTotalMiss - missed - reservedPenalty)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Text(subject.name).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+                Button { selectedSubject = subject } label: { Label(subject.name, systemImage: "square.grid.3x3") }.buttonStyle(.plain).font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
                 Text(recorded > 0 ? "\(Int(Double(attended) / Double(recorded) * 100))%" : "Unmarked")
                     .font(.caption.weight(.medium)).foregroundStyle(recorded > 0 ? accent : .secondary)
@@ -508,6 +586,52 @@ struct SATHICommandCenter: View {
                 }.font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(.top, 8)
             }.font(.caption).tint(accent)
         }.padding(16).sathiCard()
+    }
+
+    private func lectureNumber(_ session: TimetableSession) -> Int {
+        if let number = lectureOrdinals[session.id] { return number }
+        let values = sessions.filter { $0.subject == session.subject && $0.section == session.section }.sorted { ($0.date, $0.time, $0.id) < ($1.date, $1.time, $1.id) }
+        return (values.firstIndex(where: { $0.id == session.id }) ?? 0) + 1
+    }
+    private func quickProof(_ id: String, keyPath: WritableKeyPath<ClassProof, Bool?>, symbol: String, title: String) -> some View {
+        let proof = study.workspace.proofs[id] ?? .init()
+        return Button {
+            var value = proof; value[keyPath: keyPath] = proof[keyPath: keyPath] != true
+            if value.fingerprint == true && value.signedSheet == true { value.attended = true }
+            value.updatedAt = Date(); study.workspace.proofs[id] = value; try? study.saveWorkspace()
+        } label: {
+            Label(title, systemImage: symbol).font(.caption).foregroundStyle(proof[keyPath: keyPath] == true ? Color.accentColor : .secondary)
+                .padding(7).background(proof[keyPath: keyPath] == true ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.035), in: Capsule())
+        }.buttonStyle(.plain)
+    }
+    private func subjectLectureSheet(_ subject: TimetableSubject) -> some View {
+        let rows = sessions.filter { $0.subject + "|" + $0.section == subject.key }
+        let guests = customEvents.filter { $0.subject == subject.name || $0.subject == (subject.key.components(separatedBy: "|").first ?? "") }
+        let items = rows.map { (id: $0.id, date: $0.date, time: $0.time, label: String(lectureNumber($0)), title: $0.subject) } + guests.map { (id: "custom-" + $0.id.uuidString, date: $0.date, time: $0.start + " – " + $0.end, label: $0.type == "Guest lecture" ? "G" : "A", title: $0.title) }
+        return NavigationStack {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
+                    ForEach(items.sorted { ($0.date, $0.time) < ($1.date, $1.time) }, id: \.id) { item in
+                        VStack(spacing: 8) {
+                            Text(item.label).font(.title2.bold())
+                            Text(item.date).font(.caption2)
+                            Text(item.time).font(.caption2)
+                            Menu("Mark / edit") {
+                                Button("Attended") { onAttendanceChange(item.id, "Attended") }
+                                Button("Missed") { onAttendanceChange(item.id, "Missed") }
+                                Button("OD") { onAttendanceChange(item.id, "OD") }
+                                Button("Clear status") { onAttendanceChange(item.id, nil) }
+                                Button("Reschedule") { selectedSubject = nil
+                                    if let row = rows.first(where: { $0.id == item.id }) { editingSession = row }
+                                    else { editingEvent = guests.first { "custom-" + $0.id.uuidString == item.id } }
+                                }
+                            }.font(.caption)
+                        }.padding(12).frame(maxWidth: .infinity)
+                            .background((attendance[item.id] == "Attended" || attendance[item.id] == "OD") ? accent.opacity(0.30) : Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
+                    }
+                }.padding()
+            }.navigationTitle(subject.name).toolbar { Button("Done") { selectedSubject = nil } }
+        }.frame(minWidth: 320, minHeight: 400)
     }
 
     private func metric(_ title: String, _ value: String, detail: String, symbol: String) -> some View {
@@ -537,6 +661,8 @@ struct SATHICommandCenter: View {
             settingsButton("Appearance & reminders", symbol: "slider.horizontal.3", action: onAppearance)
             settingsButton("Semester history", symbol: "clock.arrow.circlepath", action: onHistory)
             if canStartNextSemester { settingsButton("Import next semester", symbol: "calendar.badge.plus", action: onNextSemester) }
+            settingsButton("Check or correct my timetable", symbol: "checkmark.rectangle", action: onManualReview)
+            settingsButton("Whole timetable", symbol: "tablecells", action: onWholeSchedule)
             settingsButton("My subjects", symbol: "books.vertical", action: onSubjects)
             if canEditSelection { settingsButton("Edit subject selection", symbol: "checklist", action: onEditSelection) }
             settingsButton("Change semester", symbol: "graduationcap", action: onChangeSemester)
@@ -569,9 +695,8 @@ struct SATHICommandCenter: View {
 
     private func sessionsOn(_ date: Date) -> [TimetableSession] { sortedSessions.filter { $0.date == SATHIDate.key(date) } }
     private func eventsOn(_ date: Date) -> [SATHICommandEvent] {
-        let key = SATHIDate.key(date)
-        return EventPresentation.consolidate(events.filter { $0.date == key }.map { SATHICommandEvent(id: "excel-\($0.source)-\($0.time)", date: $0.date, title: $0.title, time: $0.time) }
-            + custom.filter { $0.date == key })
+        let values = events.map { SATHICommandEvent(id: $0.id ?? "excel-\($0.source)-\($0.time)", date: $0.date, title: $0.title, time: $0.time) } + custom
+        return EventPresentation.applyingOverrides(values, overrides: study.workspace.overrides, semesterID: study.workspace.currentSemesterID).filter { $0.date == SATHIDate.key(date) }
     }
     private func nextInstructionalDay(after date: Date) -> (date: Date, count: Int)? {
         let key = SATHIDate.key(date)
@@ -607,7 +732,7 @@ private enum SATHIPage: String, CaseIterable, Identifiable {
     }
 }
 
-private enum SATHIDate {
+enum SATHIDate {
     static let formatter: DateFormatter = {
         let value = DateFormatter(); value.locale = Locale(identifier: "en_US_POSIX"); value.timeZone = .autoupdatingCurrent; value.dateFormat = "yyyy-MM-dd"; return value
     }()
@@ -633,7 +758,7 @@ private struct StudyGlassCard: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             if glassStyle == "solid" || reduceTransparency { RoundedRectangle(cornerRadius: 18).fill(.background) }
-            else { RoundedRectangle(cornerRadius: 18).fill(.thinMaterial).opacity(glassStyle == "clear" ? 0.45 : opacity) }
+            else { RoundedRectangle(cornerRadius: 18).fill(glassStyle == "frosted" ? Material.regular : glassStyle == "ultraThin" ? Material.ultraThin : Material.thin).opacity(glassStyle == "clear" ? 0.45 : opacity) }
         }
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.primary.opacity(0.08)))
     }

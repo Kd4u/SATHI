@@ -84,12 +84,27 @@ public class CompatibilityTest {
                 .put("attended", true)
                 .put("fingerprint", true)
                 .put("signedSheet", false)));
+    assertTrue(Schedule.penalties(sessions, records).isEmpty());
+    assertEquals("Attended", Schedule.status(sessions.get(0), records, Set.of()));
+    records.put("study:preferences", Snapshot.value(new JSONObject().put("proofCrosscheck", true)));
     Set<String> penalties = Schedule.penalties(sessions, records);
     assertEquals(Set.of("s1", "s2", "s3"), penalties);
     assertEquals("Missed", Schedule.status(sessions.get(0), records, penalties));
     assertEquals("Unmarked", Schedule.status(sessions.get(4), records, penalties));
     records.put("study:proof:s1", Snapshot.value(new JSONObject().put("officialDuty", true)));
     assertEquals("OD", Schedule.status(sessions.get(1), records, penalties));
+  }
+
+  @Test
+  public void manualSelectionOverridesElectivesAndRetainsStableIDs() throws Exception {
+    Map<String, String> records = new TreeMap<>();
+    JSONArray sessions = new JSONArray().put(session("a", "2026-11-01", 9)).put(session("b", "2026-11-02", 10));
+    records.put("timetable", Snapshot.value(new JSONObject().put("sessions", sessions)));
+    records.put("selection", Snapshot.value(new JSONObject().put("semester", 5).put("keys", new JSONArray())));
+    records.put("study:semesters", Snapshot.value(new JSONObject().put("current", "term")));
+    records.put("study:preferences", Snapshot.value(new JSONObject().put("manualSelections", new JSONObject().put("term", new JSONArray().put("b")))));
+    List<JSONObject> chosen = Schedule.classes(records);
+    assertEquals(1, chosen.size()); assertEquals("b", chosen.get(0).getString("id"));
   }
 
   @Test

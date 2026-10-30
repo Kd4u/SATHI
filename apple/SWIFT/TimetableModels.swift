@@ -23,6 +23,7 @@ struct TimetableEvent: Codable {
     let time: String
     let title: String
     let source: String
+    var id: String? = nil
 }
 
 struct TimetableReport: Codable {
@@ -77,7 +78,8 @@ nonisolated enum TimetableIdentity {
     static func programme(source: String) -> String {
         let sheet = source.components(separatedBy: "!")[0].uppercased()
         if sheet.contains("HHM") { return "HHM" }
-        if sheet.contains("DBM") || sheet.contains("DBAI") { return "DBM" }
+        if sheet.contains("DBAI") { return "DBAI" }
+        if sheet.contains("DBM") { return "DBM" }
         return "MBA"
     }
     // Return repaired identities alongside an exact old-to-new selection map.

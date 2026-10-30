@@ -9,6 +9,14 @@ import org.json.*;
 public final class Schedule {
   public static final ZoneId ZONE = ZoneId.of("Asia/Kolkata");
 
+  static String programme(String source) {
+    String sheet = source.split("!", 2)[0].toUpperCase(Locale.ROOT);
+    if (sheet.contains("HHM")) return "HHM";
+    if (sheet.contains("DBAI")) return "DBAI";
+    if (sheet.contains("DBM")) return "DBM";
+    return "MBA";
+  }
+
   public static LocalDate today() {
     return LocalDate.now(ZONE);
   }
@@ -24,15 +32,21 @@ public final class Schedule {
     int semester = selection.optInt("semester", 1);
     List<JSONObject> out = new ArrayList<>();
     String current = Snapshot.object(records, "study:semesters").optString("current");
+    JSONObject manualSets = prefs.optJSONObject("manualSelections");
+    JSONArray manualList = manualSets == null ? null : manualSets.optJSONArray(current);
+    Set<String> manual = new HashSet<>();
+    if (manualList != null) for (int i = 0; i < manualList.length(); i++) manual.add(manualList.optString(i));
     Set<String> ids = new HashSet<>();
     if (sessions != null)
       for (int i = 0; i < sessions.length(); i++) {
         JSONObject s = new JSONObject(sessions.getJSONObject(i).toString());
         String id = s.getString("id");
         ids.add(id);
-        if (semester >= 4
+        if (manualList != null && !manual.contains(id)) continue;
+        if (manualList == null && !programme(s.optString("source")).equals(prefs.optString("programme", "MBA"))) continue;
+        if (manualList == null && semester >= 4
             && !selected.contains(s.optString("subject") + "|" + s.optString("section"))) continue;
-        if (semester < 4
+        if (manualList == null && semester < 4
             && !section.isEmpty()
             && !s.optString("section").isEmpty()
             && !section.equalsIgnoreCase(s.optString("section"))) continue;
@@ -147,6 +161,7 @@ public final class Schedule {
   public static Set<String> penalties(List<JSONObject> windows, Map<String, String> records)
       throws Exception {
     Set<String> out = new HashSet<>();
+    if (!Snapshot.object(records, "study:preferences").optBoolean("proofCrosscheck", false)) return out;
     long now = System.currentTimeMillis();
     for (int i = 0; i < windows.size(); i++) {
       JSONObject s = windows.get(i);
@@ -171,6 +186,10 @@ public final class Schedule {
             : "Unmarked";
     JSONObject p = Snapshot.object(records, "study:proof:" + id);
     if (p.optBoolean("officialDuty") || old.equals("OD")) return "OD";
+    if (!Snapshot.object(records, "study:preferences").optBoolean("proofCrosscheck", false)) {
+      if (p.has("attended")) return p.optBoolean("attended") ? "Attended" : "Missed";
+      return old;
+    }
     if (penalties.contains(id)) return "Missed";
     if (p.has("attended") && !p.optBoolean("attended")) return "Missed";
     if (p.optBoolean("attended") && p.optBoolean("fingerprint") && p.optBoolean("signedSheet"))

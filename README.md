@@ -34,6 +34,8 @@ This is an independent student project, not an official IIM Bodh Gaya applicatio
 - **Glance at your schedule:** Apple widgets and an Android Home Screen widget use the saved timetable. Taller Android widgets show three days.
 - **Make it yours:** dark/light appearance, accent colours and optional reminders.
 
+The latest Apple experience adds manual day/week timetable review, whole-schedule browsing, lecture tiles, optional proof shortcuts, local campus documents and an optional notebook Pro canvas. See [scope and verification](docs/EXPERIENCE_UPDATE.md) for platform differences. Android includes shared manual-selection compatibility, optional crosschecks, wallpaper accents and expanded activity types.
+
 SATHI does not connect to a college's biometric or official attendance system. Fingerprint and attendance-sheet entries are personal records. Local AI/chat and bundled language models are not part of this project.
 
 ## Platform status
